@@ -1,0 +1,14 @@
+{
+  "id": "workspace_99843ded-ba48-479d-bce9-7a818b6c2e24",
+  "name": "test2",
+  "rows": [
+    {
+      "id": "row_bd5016ca-f2bd-4c0a-9334-d9282f480cd0",
+      "name": "Row 1",
+      "order": 0,
+      "color": "#6366f1"
+    }
+  ],
+  "zoom": "days",
+  "lastOpened": "2026-04-10T03:37:17.712Z"
+}

@@ -1,0 +1,26 @@
+{
+  "id": "workspace_b7b7a6eb-307a-460b-9b6c-cc720540ac7d",
+  "name": "test",
+  "rows": [
+    {
+      "id": "row_4190411e-748a-4d55-a3b3-623546be8188",
+      "name": "Row 1",
+      "order": 0,
+      "color": "#6366f1"
+    },
+    {
+      "id": "row_cdc6663e-9180-4725-aa41-79d694bc4c98",
+      "name": "Row 2",
+      "order": 1,
+      "color": "#6366f1"
+    },
+    {
+      "id": "row_4362089e-c970-467e-89bf-5ce057e40b04",
+      "name": "Row 3",
+      "order": 2,
+      "color": "#6366f1"
+    }
+  ],
+  "zoom": "months",
+  "lastOpened": "2026-04-10T03:35:14.684Z"
+}

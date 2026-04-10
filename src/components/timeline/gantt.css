@@ -1,0 +1,92 @@
+/* ── Dark-theme variable overrides ─────────────────────────────────────────── */
+html[data-theme="dark"] {
+  --g-header-background: #18181b;
+  --g-row-color: #18181b;
+  --g-row-border-color: #2a2a2f;
+  --g-border-color: #2a2a2f;
+  --g-tick-color: #2a2a2f;
+  --g-tick-color-thick: #3a3a40;
+  --g-text-dark: #f1f1f3;
+  --g-text-muted: #8b8b99;
+  --g-text-light: #f1f1f3;
+  --g-today-highlight: #f87171;
+  --g-bar-color: #3d3d42;
+  --g-bar-border: #3d3d42;
+  --g-arrow-color: #6b6b78;
+  --g-progress-color: #2a2a2f;
+  --g-handle-color: #d0d0d8;
+  --g-weekend-highlight-color: #1a1a1e;
+  --g-weekend-label-color: #2a2a2f;
+  --g-actions-background: #1f1f23;
+  --g-popup-actions: #1f1f23;
+  --g-expected-progress: #3a3a42;
+}
+
+/* ── Container ──────────────────────────────────────────────────────────────── */
+/* Force the Frappe container to fill our wrapper and scroll internally. */
+.gantt-wrapper .gantt-container {
+  border-radius: 0 !important;
+  height: 100% !important;
+}
+
+/* ── Today line ─────────────────────────────────────────────────────────────── */
+.gantt-container .current-highlight {
+  background: var(--color-today-line, #f87171) !important;
+  width: 2px !important;
+  opacity: 0.85;
+}
+
+/* ── Suppress built-in popup (we open our own side panel) ───────────────────── */
+.gantt-container .popup-wrapper {
+  display: none !important;
+}
+
+/* ── Suppress built-in view-mode selector ───────────────────────────────────── */
+.gantt-container .side-header {
+  display: none !important;
+}
+
+/* ── Placeholder rows (empty-row spacers) ───────────────────────────────────── */
+.gantt .bar-wrapper.placeholder-row {
+  pointer-events: none !important;
+}
+.gantt .bar-wrapper.placeholder-row .bar,
+.gantt .bar-wrapper.placeholder-row .bar-label,
+.gantt .bar-wrapper.placeholder-row .handle,
+.gantt .bar-wrapper.placeholder-row .bar-progress {
+  display: none !important;
+}
+
+/* ── Task status styles ─────────────────────────────────────────────────────── */
+.gantt .bar-wrapper.task-done .bar {
+  opacity: 0.45;
+}
+
+.gantt .bar-wrapper.task-overdue .bar {
+  outline: 1.5px solid #ef4444 !important;
+}
+
+/* ── Milestone tasks: 1-day pill with center dot ────────────────────────────── */
+.gantt .bar-wrapper.task-milestone .bar {
+  rx: 50% !important;
+  ry: 50% !important;
+}
+
+/* ── Dependency arrows ──────────────────────────────────────────────────────── */
+.gantt .arrow {
+  stroke-width: 1.5 !important;
+  opacity: 0.75;
+}
+
+/* ── Bar label font ─────────────────────────────────────────────────────────── */
+.gantt .bar-label {
+  font-family: "DM Sans", ui-sans-serif, sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+/* ── Header font ────────────────────────────────────────────────────────────── */
+.gantt-container .lower-text,
+.gantt-container .upper-text {
+  font-family: "DM Sans", ui-sans-serif, sans-serif !important;
+}

@@ -1,0 +1,106 @@
+import { useRef, useState } from "react";
+import type { ZoomLevel } from "../../types";
+import { useWorkspace, useLoadedWorkspace } from "../../context/WorkspaceContext";
+
+const ZOOM_LABELS: Record<ZoomLevel, string> = {
+  days: "Days",
+  weeks: "Weeks",
+  months: "Months",
+};
+
+export default function TopBar() {
+  const { closeWorkspace, setPanel } = useWorkspace();
+  const { workspace, setZoom, renameWorkspace } = useLoadedWorkspace();
+
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(workspace.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function startRename() {
+    setDraftName(workspace.name);
+    setIsRenaming(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  }
+
+  async function commitRename() {
+    const trimmed = draftName.trim();
+    if (trimmed && trimmed !== workspace.name) {
+      await renameWorkspace(trimmed);
+    }
+    setIsRenaming(false);
+  }
+
+  function handleNameKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") commitRename();
+    if (e.key === "Escape") setIsRenaming(false);
+  }
+
+  return (
+    <div className="flex h-[52px] flex-shrink-0 items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4">
+      {/* Workspace name */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {isRenaming ? (
+          <input
+            ref={inputRef}
+            className="min-w-0 flex-1 rounded bg-[var(--color-bg-elevated)] px-2 py-1 text-sm font-medium text-[var(--color-text-primary)] outline outline-1 outline-[var(--color-accent)] focus:outline-2"
+            value={draftName}
+            autoFocus
+            onChange={(e) => setDraftName(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={handleNameKeyDown}
+          />
+        ) : (
+          <button
+            className="min-w-0 truncate rounded px-1 py-0.5 text-left text-sm font-semibold text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]"
+            onClick={startRename}
+            title="Click to rename workspace"
+          >
+            {workspace.name}
+          </button>
+        )}
+      </div>
+
+      {/* Zoom controls */}
+      <div className="flex rounded border border-[var(--color-border)]">
+        {(["days", "weeks", "months"] as ZoomLevel[]).map((z, i) => (
+          <button
+            key={z}
+            onClick={() => setZoom(z)}
+            className={[
+              "px-3 py-1 text-xs font-medium transition-colors",
+              i === 0 ? "rounded-l" : i === 2 ? "rounded-r" : "",
+              i < 2 ? "border-r border-[var(--color-border)]" : "",
+              workspace.zoom === z
+                ? "bg-[var(--color-accent)] text-white"
+                : "bg-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+            ].join(" ")}
+          >
+            {ZOOM_LABELS[z]}
+          </button>
+        ))}
+      </div>
+
+      {/* New task button */}
+      <button
+        onClick={() => setPanel({ type: "newTask" })}
+        className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+          <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+        New Task
+      </button>
+
+      {/* Close workspace */}
+      <button
+        onClick={closeWorkspace}
+        title="Close workspace"
+        className="ml-1 flex h-7 w-7 items-center justify-center rounded text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <path d="M2 2l10 10M12 2L2 12" />
+        </svg>
+      </button>
+    </div>
+  );
+}
