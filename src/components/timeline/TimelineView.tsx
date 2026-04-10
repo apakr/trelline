@@ -42,6 +42,7 @@ export default function TimelineView() {
         />
 
         <TimelineCanvas
+          key={workspace.zoom}
           sortedRows={sortedRows}
           tasks={tasks}
           zoom={workspace.zoom}
