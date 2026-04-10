@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import Gantt from "frappe-gantt";
 import type { GanttTask } from "frappe-gantt";
-import { format, addDays } from "date-fns";
+import { format, addDays, addMonths, addYears } from "date-fns";
 import type { Row, Task, ZoomLevel } from "../../types";
 import { computeEffectiveStatus } from "../../types";
 import { useWorkspace } from "../../context/WorkspaceContext";
@@ -69,8 +69,15 @@ const CUSTOM_VIEW_MODES: any[] = [
   },
 ];
 
-const PLACEHOLDER_START = "2020-01-01";
-const PLACEHOLDER_END = "2020-01-01";
+const TODAY = format(new Date(), "yyyy-MM-dd");
+
+// Per-zoom range anchors — extend gantt_end to today+N so scroll-to-today
+// works on any workspace. Kept short for Day to avoid rendering 1000+ columns.
+const RANGE_ANCHOR: Record<ZoomLevel, string> = {
+  days:   format(addMonths(new Date(), 3), "yyyy-MM-dd"),
+  weeks:  format(addMonths(new Date(), 14), "yyyy-MM-dd"),
+  months: format(addYears(new Date(), 3), "yyyy-MM-dd"),
+};
 
 // ── Props ──────────────────────────────────────────────────────────────────────
 
@@ -132,8 +139,8 @@ export default function TimelineCanvas({
           id: `__placeholder__${row.id}`,
           title: "",
           rowId: row.id,
-          start: PLACEHOLDER_START,
-          end: PLACEHOLDER_END,
+          start: TODAY,
+          end: TODAY,
           status: "not_done",
           color: "transparent",
           isMilestone: false,
@@ -151,7 +158,7 @@ export default function TimelineCanvas({
 
   /** Frappe GanttTask[] derived from orderedDomainTasks. */
   const ganttTasks = useMemo<GanttTask[]>(() => {
-    return orderedDomainTasks.map((task) => {
+    const mapped = orderedDomainTasks.map((task) => {
       const isPlaceholder = task.id.startsWith("__placeholder__");
       const effectiveStatus = isPlaceholder
         ? ("not_done" as const)
@@ -179,7 +186,20 @@ export default function TimelineCanvas({
         color: isPlaceholder ? undefined : task.color,
       } as GanttTask;
     });
-  }, [orderedDomainTasks]);
+
+    // Invisible anchor — extends gantt_end to today+N for the current zoom so
+    // scroll-to-today always works without rendering excessive columns.
+    mapped.push({
+      id: "__range_anchor__",
+      name: "",
+      start: RANGE_ANCHOR[zoom],
+      end: RANGE_ANCHOR[zoom],
+      progress: 0,
+      custom_class: "placeholder-row",
+    });
+
+    return mapped;
+  }, [orderedDomainTasks, zoom]);
 
   // ── Initialize Frappe once on mount ────────────────────────────────────────
 
@@ -191,9 +211,7 @@ export default function TimelineCanvas({
 
     ganttRef.current = new Gantt(
       mountRef.current,
-      // Frappe crashes if given an empty array when dates can't be computed;
-      // fall back to a dummy task list just long enough to mount safely.
-      ganttTasks.length > 0 ? ganttTasks : dummyGanttTasks(),
+      ganttTasks,
       {
         view_modes: CUSTOM_VIEW_MODES,
         view_mode: ZOOM_TO_VIEW_MODE[zoom] as Parameters<Gantt["change_view_mode"]>[0],
@@ -231,6 +249,9 @@ export default function TimelineCanvas({
       } as ConstructorParameters<typeof Gantt>[2]
     );
 
+    // Ensure initial scroll lands on today regardless of task date range.
+    setTimeout(() => scrollGanttToToday(ganttRef.current!), 0);
+
     // ── Scroll sync: when Frappe scrolls vertically, mirror the RowPanel. ──
     const ganttContainer = mountRef.current.querySelector(
       ".gantt-container"
@@ -256,23 +277,36 @@ export default function TimelineCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Refresh tasks when orderedDomainTasks / ganttTasks changes ─────────────
+  // Track previous zoom so we can distinguish "only tasks changed" from
+  // "zoom changed" — the two cases need different Frappe call sequences.
+  const prevZoomRef = useRef(zoom);
+
+  // ── Sync tasks + view mode whenever either changes ─────────────────────────
 
   useEffect(() => {
     if (!ganttRef.current) return;
-    ganttRef.current.refresh(
-      ganttTasks.length > 0 ? ganttTasks : dummyGanttTasks()
-    );
-  }, [ganttTasks]);
 
-  // ── Change view mode when zoom changes ─────────────────────────────────────
+    const zoomChanged = prevZoomRef.current !== zoom;
+    prevZoomRef.current = zoom;
 
-  useEffect(() => {
-    if (!ganttRef.current) return;
-    ganttRef.current.change_view_mode(
-      ZOOM_TO_VIEW_MODE[zoom] as Parameters<Gantt["change_view_mode"]>[0]
-    );
-  }, [zoom]);
+    if (zoomChanged) {
+      // Load the new tasks (with zoom-appropriate anchor) WITHOUT rendering
+      // in the old mode first — that would render e.g. 1000 day columns for
+      // a 3-year anchor, crashing the WebView. setup_tasks() updates the
+      // internal task list only; change_view_mode() then renders once cleanly.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (ganttRef.current as any).setup_tasks(ganttTasks);
+      ganttRef.current.change_view_mode(
+        ZOOM_TO_VIEW_MODE[zoom] as Parameters<Gantt["change_view_mode"]>[0]
+      );
+    } else {
+      // Only tasks changed (add/edit/delete) — refresh re-renders in the
+      // current mode which is correct.
+      ganttRef.current.refresh(ganttTasks);
+    }
+
+    setTimeout(() => scrollGanttToToday(ganttRef.current!), 0);
+  }, [ganttTasks, zoom]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -292,16 +326,20 @@ export default function TimelineCanvas({
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function dummyGanttTasks(): GanttTask[] {
-  const today = format(new Date(), "yyyy-MM-dd");
-  return [
-    {
-      id: "__dummy__",
-      name: "",
-      start: today,
-      end: today,
-      progress: 0,
-      custom_class: "placeholder-row",
-    },
-  ];
+/**
+ * Scroll the Frappe container so today is visible near the left-third of the
+ * viewport. Uses the `.current-highlight` element's pixel position, which
+ * Frappe sets precisely regardless of gantt_start/gantt_end range checks.
+ */
+function scrollGanttToToday(gantt: Gantt) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const container = (gantt as any).$container as HTMLElement;
+  if (!container) return;
+
+  const todayLine = container.querySelector(".current-highlight") as HTMLElement | null;
+  if (todayLine) {
+    const left = parseFloat(todayLine.style.left || "0");
+    container.scrollLeft = Math.max(0, left - container.clientWidth / 3);
+  }
 }
+
