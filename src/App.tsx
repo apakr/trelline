@@ -3,6 +3,7 @@ import { useWorkspace } from "./context/WorkspaceContext";
 import { loadAppConfig } from "./lib/appStore";
 import WorkspacePicker from "./components/WorkspacePicker";
 import TimelineView from "./components/timeline/TimelineView";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 export default function App() {
   const { workspaceState, loadWorkspace, refreshAppConfig } = useWorkspace();
@@ -50,5 +51,9 @@ export default function App() {
     return <WorkspacePicker />;
   }
 
-  return <TimelineView />;
+  return (
+    <ErrorBoundary>
+      <TimelineView />
+    </ErrorBoundary>
+  );
 }

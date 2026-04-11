@@ -9,18 +9,12 @@
       "color": "#6366f1"
     },
     {
-      "id": "row_cdc6663e-9180-4725-aa41-79d694bc4c98",
+      "id": "row_2c2430c4-f06e-469a-9918-008306fa0b13",
       "name": "Row 2",
       "order": 1,
       "color": "#6366f1"
-    },
-    {
-      "id": "row_4362089e-c970-467e-89bf-5ce057e40b04",
-      "name": "Row 3",
-      "order": 2,
-      "color": "#6366f1"
     }
   ],
-  "zoom": "weeks",
-  "lastOpened": "2026-04-10T07:12:05.111Z"
+  "zoom": "days",
+  "lastOpened": "2026-04-11T00:36:10.481Z"
 }

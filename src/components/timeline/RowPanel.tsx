@@ -12,6 +12,7 @@ interface RowPanelProps {
   taskCountByRowId: Map<string, number>;
   bodyRef: React.RefObject<HTMLDivElement | null>;
   onAddRow: () => void;
+  onDeleteRow: (rowId: string) => void;
 }
 
 export default function RowPanel({
@@ -19,6 +20,7 @@ export default function RowPanel({
   taskCountByRowId,
   bodyRef,
   onAddRow,
+  onDeleteRow,
 }: RowPanelProps) {
   return (
     <div
@@ -68,6 +70,7 @@ export default function RowPanel({
                 row={row}
                 taskCount={taskCountByRowId.get(row.id) ?? 0}
                 height={rowHeightPx}
+                onDelete={() => onDeleteRow(row.id)}
               />
             );
           })
@@ -81,10 +84,12 @@ function RowItem({
   row,
   taskCount,
   height,
+  onDelete,
 }: {
   row: Row;
   taskCount: number;
   height: number;
+  onDelete: () => void;
 }) {
   return (
     <div
@@ -102,9 +107,20 @@ function RowItem({
         </span>
       </div>
 
-      {/* Task count badge */}
+      {/* Delete button — visible on hover */}
+      <button
+        onClick={onDelete}
+        title="Delete row"
+        className="absolute right-2 top-2.5 hidden rounded p-0.5 text-[var(--color-text-secondary)] hover:bg-red-500/15 hover:text-red-400 group-hover:flex"
+      >
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <path d="M2.5 4h8M5 4V2.5h3V4M5.5 6.5v3M7.5 6.5v3M3.5 4l.5 6.5h5.5L10 4" />
+        </svg>
+      </button>
+
+      {/* Task count badge — hidden when delete button is visible */}
       {taskCount > 0 && (
-        <span className="absolute right-3 top-3 rounded bg-[var(--color-bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
+        <span className="absolute right-3 top-3 rounded bg-[var(--color-bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)] group-hover:hidden">
           {taskCount}
         </span>
       )}

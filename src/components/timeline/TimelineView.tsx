@@ -5,7 +5,7 @@ import RowPanel from "./RowPanel";
 import TimelineCanvas from "./TimelineCanvas";
 
 export default function TimelineView() {
-  const { workspace, tasks, addRow } = useLoadedWorkspace();
+  const { workspace, tasks, addRow, deleteRow } = useLoadedWorkspace();
 
   // Ref to the RowPanel body — passed to TimelineCanvas for scroll sync.
   const rowPanelBodyRef = useRef<HTMLDivElement>(null);
@@ -14,6 +14,14 @@ export default function TimelineView() {
   const sortedRows = useMemo(
     () => [...workspace.rows].sort((a, b) => a.order - b.order),
     [workspace.rows]
+  );
+
+  // Key that forces TimelineCanvas to fully remount whenever zoom or the row set
+  // changes. Frappe Gantt can't handle structural row-count changes via setup_tasks(),
+  // so a full remount (same technique already used for zoom) is the safe path.
+  const canvasKey = useMemo(
+    () => workspace.zoom + "|" + sortedRows.map((r) => r.id).join(","),
+    [workspace.zoom, sortedRows]
   );
 
   // Count of real tasks per row (used by RowPanel for height calculation).
@@ -39,10 +47,11 @@ export default function TimelineView() {
             const name = `Row ${sortedRows.length + 1}`;
             await addRow(name);
           }}
+          onDeleteRow={deleteRow}
         />
 
         <TimelineCanvas
-          key={workspace.zoom}
+          key={canvasKey}
           sortedRows={sortedRows}
           tasks={tasks}
           zoom={workspace.zoom}
