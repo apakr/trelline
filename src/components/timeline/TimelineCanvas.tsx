@@ -35,7 +35,8 @@ interface Column {
   x: number;
   width: number;
   label: string;
-  isWeekend?: boolean;
+  isWeekend?: boolean;    // days zoom
+  isMonthStart?: boolean; // weeks zoom
 }
 
 function buildColumns(
@@ -57,9 +58,20 @@ function buildColumns(
     }
   } else if (zoom === "weeks") {
     let d = startOfISOWeek(viewStart); // Monday
+    let prevMonth = -1;
+    const seenMonths = new Set<number>();
+    const monthKey = (date: Date) => date.getFullYear() * 12 + date.getMonth();
     while (isBefore(d, viewEnd)) {
       const x = dateToX(d, viewStart, viewEnd, canvasWidth);
-      cols.push({ key: d.toISOString(), date: d, x, width: 7 * px, label: format(d, "MMM d") });
+      const isMonthStart = d.getMonth() !== prevMonth;
+      prevMonth = d.getMonth();
+      const endOfWeek = addDays(d, 6);
+      const startLabel = seenMonths.has(monthKey(d)) ? format(d, "d") : format(d, "MMM d");
+      seenMonths.add(monthKey(d));
+      const endLabel = seenMonths.has(monthKey(endOfWeek)) ? format(endOfWeek, "d") : format(endOfWeek, "MMM d");
+      seenMonths.add(monthKey(endOfWeek));
+      const label = `${startLabel} – ${endLabel}`;
+      cols.push({ key: d.toISOString(), date: d, x, width: 7 * px, label, isMonthStart });
       d = addWeeks(d, 1);
     }
   } else {
@@ -69,7 +81,7 @@ function buildColumns(
       const nextMonth = addMonths(d, 1);
       const x = dateToX(d, viewStart, viewEnd, canvasWidth);
       const xEnd = dateToX(nextMonth, viewStart, viewEnd, canvasWidth);
-      cols.push({ key: d.toISOString(), date: d, x, width: xEnd - x, label: format(d, "MMM yyyy") });
+      cols.push({ key: d.toISOString(), date: d, x, width: xEnd - x, label: format(d, "MMM") });
       d = nextMonth;
     }
   }
@@ -97,6 +109,18 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
     () => buildColumns(viewStart, viewEnd, canvasWidth, zoom),
     [viewStart, viewEnd, canvasWidth, zoom]
   );
+
+  // --- month start positions for weeks zoom (exact 1st-of-month x) ---
+  const weekZoomMonthStarts = useMemo(() => {
+    if (zoom !== "weeks") return [];
+    const result: Array<{ date: Date; x: number }> = [];
+    let d = startOfMonth(viewStart);
+    while (isBefore(d, viewEnd)) {
+      result.push({ date: d, x: dateToX(d, viewStart, viewEnd, canvasWidth) });
+      d = addMonths(d, 1);
+    }
+    return result;
+  }, [viewStart, viewEnd, canvasWidth, zoom]);
 
   // --- today line ---
   const today = startOfDay(new Date());
@@ -147,15 +171,35 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
           })}
         </defs>
 
-        {/* ── Column backgrounds (days zoom: weekday/weekend shading) ─── */}
+        {/* ── Column backgrounds ───────────────────────────────────────── */}
         {zoom === "days" && columns.map((col) => (
           <rect
             key={`colbg-${col.key}`}
-            x={col.x}
-            y={HEADER_HEIGHT}
-            width={col.width}
-            height={svgHeight - HEADER_HEIGHT}
+            x={col.x} y={HEADER_HEIGHT}
+            width={col.width} height={svgHeight - HEADER_HEIGHT}
             fill={col.isWeekend ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.03)"}
+          />
+        ))}
+        {zoom === "weeks" && columns.flatMap((col) =>
+          [0, 1, 2, 3, 4, 5, 6].map((offset) => {
+            const dow = getDay(addDays(col.date, offset));
+            const isWeekend = dow === 0 || dow === 6;
+            return (
+              <rect
+                key={`colbg-${col.key}-${offset}`}
+                x={col.x + offset * pxPerDay("weeks")} y={HEADER_HEIGHT}
+                width={pxPerDay("weeks")} height={svgHeight - HEADER_HEIGHT}
+                fill={isWeekend ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.03)"}
+              />
+            );
+          })
+        )}
+        {zoom === "months" && columns.map((col) => (
+          <rect
+            key={`colbg-${col.key}`}
+            x={col.x} y={HEADER_HEIGHT}
+            width={col.width} height={svgHeight - HEADER_HEIGHT}
+            fill={col.date.getMonth() % 2 === 0 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.15)"}
           />
         ))}
 
@@ -184,6 +228,21 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
             strokeWidth={1}
           />
         ))}
+
+        {/* ── Day subdivisions within weeks zoom columns ───────────────── */}
+        {zoom === "weeks" && columns.flatMap((col) =>
+          [1, 2, 3, 4, 5, 6].map((offset) => (
+            <line
+              key={`daysub-${col.key}-${offset}`}
+              x1={col.x + offset * pxPerDay("weeks")}
+              y1={HEADER_HEIGHT}
+              x2={col.x + offset * pxPerDay("weeks")}
+              y2={svgHeight}
+              stroke="rgba(255,255,255,0.08)"
+              strokeWidth={1}
+            />
+          ))
+        )}
 
         {/* ── Today line ───────────────────────────────────────────────── */}
         {todayVisible && (
@@ -263,7 +322,7 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
           fill="var(--color-bg-surface)"
         />
 
-        {/* ── Header column borders (days zoom only) ───────────────────── */}
+        {/* ── Header column borders ────────────────────────────────────── */}
         {zoom === "days" && columns.map((col) => {
           const isMonthBoundary = col.date.getDate() === 1;
           const isWeekBoundary = getDay(col.date) === 1;
@@ -271,51 +330,65 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
           return (
             <line
               key={`hborder-${col.key}`}
-              x1={col.x}
-              y1={isMonthBoundary ? 0 : 18}
-              x2={col.x}
-              y2={isMonthBoundary ? 18 : 36}
+              x1={col.x} y1={isMonthBoundary ? 0 : 18}
+              x2={col.x} y2={isMonthBoundary ? 18 : 36}
               stroke={isMonthBoundary ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)"}
               strokeWidth={1}
             />
           );
         })}
+        {zoom === "weeks" && (
+          <>
+            {weekZoomMonthStarts.map((ms) => (
+              <line key={`hborder-mo-${ms.date.toISOString()}`} x1={ms.x} y1={0} x2={ms.x} y2={26} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />
+            ))}
+            {columns.map((col) => (
+              <line key={`hborder-wk-${col.key}`} x1={col.x} y1={26} x2={col.x} y2={HEADER_HEIGHT} stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
+            ))}
+          </>
+        )}
+        {zoom === "months" && columns.map((col) => {
+          if (col.date.getMonth() !== 0) return null; // January = year boundary
+          return (
+            <line
+              key={`hborder-${col.key}`}
+              x1={col.x} y1={0}
+              x2={col.x} y2={26}
+              stroke="rgba(255,255,255,0.2)"
+              strokeWidth={1}
+            />
+          );
+        })}
 
+        {/* ── Header labels ────────────────────────────────────────────── */}
         {zoom === "days" ? (
           <>
             {/* Row 1: Month / year — only on the 1st of each month */}
             {columns.map((col) => {
               if (col.date.getDate() !== 1) return null;
               const isJanuary = col.date.getMonth() === 0;
-              const label = isJanuary
-                ? format(col.date, "MMMM yyyy")
-                : format(col.date, "MMMM");
               return (
                 <text
                   key={`mo-${col.key}`}
-                  x={col.x + 4}
-                  y={13}
-                  fontSize={10}
-                  fontWeight={500}
+                  x={col.x + 4} y={13}
+                  fontSize={10} fontWeight={500}
                   fill="rgba(255,255,255,0.65)"
                   textAnchor="start"
                   style={{ userSelect: "none" }}
                 >
-                  {label}
+                  {isJanuary ? format(col.date, "MMMM yyyy") : format(col.date, "MMMM")}
                 </text>
               );
             })}
-
             <line x1={0} y1={18} x2={canvasWidth} y2={18} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
 
             {/* Row 2: Week numbers — only on Mondays */}
             {columns.map((col) => {
-              if (getDay(col.date) !== 1) return null; // 1 = Monday
+              if (getDay(col.date) !== 1) return null;
               return (
                 <text
                   key={`wk-${col.key}`}
-                  x={col.x + 4}
-                  y={31}
+                  x={col.x + 4} y={31}
                   fontSize={10}
                   fill="rgba(255,255,255,0.4)"
                   textAnchor="start"
@@ -325,15 +398,13 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
                 </text>
               );
             })}
-
             <line x1={0} y1={36} x2={canvasWidth} y2={36} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
 
             {/* Row 3: Day numbers */}
             {columns.map((col) => (
               <text
                 key={`lbl-${col.key}`}
-                x={col.x + col.width / 2}
-                y={47}
+                x={col.x + col.width / 2} y={47}
                 fontSize={11}
                 fill="rgba(255,255,255,0.45)"
                 textAnchor="middle"
@@ -343,24 +414,84 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
               </text>
             ))}
           </>
-        ) : (
-          /* Weeks / months zoom — single centered label */
-          columns.map((col) => {
-            if (col.width < 20) return null;
-            return (
+        ) : zoom === "weeks" ? (
+          <>
+            {/* Row 1: Month name — at exact 1st-of-month x positions */}
+            {weekZoomMonthStarts.map((ms) => (
               <text
-                key={`lbl-${col.key}`}
-                x={col.x + col.width / 2}
-                y={HEADER_HEIGHT / 2 + 5}
-                fontSize={11}
-                fill="rgba(255,255,255,0.45)"
-                textAnchor="middle"
+                key={`mo-${ms.date.toISOString()}`}
+                x={ms.x + 4} y={17}
+                fontSize={10} fontWeight={500}
+                fill="rgba(255,255,255,0.65)"
+                textAnchor="start"
                 style={{ userSelect: "none" }}
               >
-                {col.label}
+                {ms.date.getMonth() === 0 ? format(ms.date, "MMMM yyyy") : format(ms.date, "MMMM")}
               </text>
-            );
-          })
+            ))}
+            <line x1={0} y1={26} x2={canvasWidth} y2={26} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+
+            {/* Row 2: W# on the left + date range after it */}
+            {columns.map((col) => (
+              <g key={`lbl-${col.key}`}>
+                <text
+                  x={col.x + 4} y={42}
+                  fontSize={9}
+                  fill="rgba(255,255,255,0.3)"
+                  textAnchor="start"
+                  style={{ userSelect: "none" }}
+                >
+                  {`W${getISOWeek(col.date)}`}
+                </text>
+                <text
+                  x={col.x + col.width / 2} y={42}
+                  fontSize={10}
+                  fill="rgba(255,255,255,0.45)"
+                  textAnchor="middle"
+                  style={{ userSelect: "none" }}
+                >
+                  {col.label}
+                </text>
+              </g>
+            ))}
+          </>
+        ) : (
+          <>
+            {/* Row 1: Year — only on January */}
+            {columns.map((col) => {
+              if (col.date.getMonth() !== 0) return null;
+              return (
+                <text
+                  key={`yr-${col.key}`}
+                  x={col.x + 4} y={17}
+                  fontSize={10} fontWeight={500}
+                  fill="rgba(255,255,255,0.65)"
+                  textAnchor="start"
+                  style={{ userSelect: "none" }}
+                >
+                  {format(col.date, "yyyy")}
+                </text>
+              );
+            })}
+            <line x1={0} y1={26} x2={canvasWidth} y2={26} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+
+            {/* Row 2: Month abbreviations */}
+            {columns.map((col) => {
+              if (col.width < 20) return null;
+              return (
+                <text
+                  key={`lbl-${col.key}`}
+                  x={col.x + col.width / 2} y={42}
+                  fontSize={11}
+                  fill="rgba(255,255,255,0.45)"
+                  textAnchor="middle"
+                  style={{ userSelect: "none" }}
+                >
+                  {col.label}
+                </text>
+              );
+            })}
+          </>
         )}
 
         {/* Today indicator dot on date axis */}
