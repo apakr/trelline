@@ -1,11 +1,14 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { useLoadedWorkspace } from "../../context/WorkspaceContext";
 import TopBar from "./TopBar";
 import RowPanel from "./RowPanel";
 import TimelineCanvas from "./TimelineCanvas";
 
 export default function TimelineView() {
-  const { workspace, tasks, addRow, deleteRow } = useLoadedWorkspace();
+  const { workspace, tasks, addRow, deleteRow, setScrollCenterDate } = useLoadedWorkspace();
+  const scrollToTodayRef = useRef<(() => void) | null>(null);
+  // Captured once on mount — stable prop that won't re-trigger canvas effects
+  const initialScrollCenterDate = useRef(workspace.scrollCenterDate);
 
   const sortedRows = useMemo(
     () => [...workspace.rows].sort((a, b) => a.order - b.order),
@@ -22,7 +25,7 @@ export default function TimelineView() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[var(--color-bg-base)]">
-      <TopBar />
+      <TopBar onScrollToToday={() => scrollToTodayRef.current?.()} />
 
       <div className="flex flex-1 overflow-hidden">
         <RowPanel
@@ -39,6 +42,9 @@ export default function TimelineView() {
           sortedRows={sortedRows}
           tasks={tasks}
           zoom={workspace.zoom}
+          scrollCenterDate={initialScrollCenterDate.current}
+          onScrollCenterDateChange={setScrollCenterDate}
+          onRegisterScrollToToday={(fn) => { scrollToTodayRef.current = fn; }}
         />
       </div>
     </div>

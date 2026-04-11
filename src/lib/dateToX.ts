@@ -60,23 +60,18 @@ export function xToDate(
 }
 
 // ---------------------------------------------------------------------------
-// View bounds — what date range to render
+// Initial view bounds — zoom-independent, used once on canvas mount
 // ---------------------------------------------------------------------------
 
-export interface ViewBounds {
+export interface InitialBounds {
   viewStart: Date;
   viewEnd: Date;
-  totalDays: number;
-  canvasWidth: number;
 }
 
-export function getViewBounds(tasks: Task[], zoom: ZoomLevel): ViewBounds {
+export function getInitialBounds(tasks: Task[]): InitialBounds {
   const today = startOfDay(new Date());
-  const px = pxPerDay(zoom);
-  const pad = zoom === "months" ? 60 : 28; // padding in days on each side
-
-  // Minimum visible span so the canvas never looks empty
-  const minDays = zoom === "days" ? 60 : zoom === "weeks" ? 84 : 365;
+  const pad = 180;    // generous padding so user can scroll before extend-on-demand fires
+  const minDays = 365;
 
   let rawStart: Date;
   let rawEnd: Date;
@@ -87,7 +82,7 @@ export function getViewBounds(tasks: Task[], zoom: ZoomLevel): ViewBounds {
     const minStart = starts.reduce((a, b) => (isBefore(a, b) ? a : b));
     const maxEnd = ends.reduce((a, b) => (isAfter(a, b) ? a : b));
 
-    // Include today so the today line is always visible in the initial view
+    // Include today so the today line is always in the initial range
     const earliest = isBefore(minStart, today) ? minStart : today;
     const latest = isAfter(maxEnd, today) ? maxEnd : today;
 
@@ -104,10 +99,8 @@ export function getViewBounds(tasks: Task[], zoom: ZoomLevel): ViewBounds {
     rawEnd = addDays(rawStart, minDays);
   }
 
-  const viewStart = startOfDay(rawStart);
-  const viewEnd = startOfDay(rawEnd);
-  const totalDays = differenceInDays(viewEnd, viewStart);
-  const canvasWidth = totalDays * px;
-
-  return { viewStart, viewEnd, totalDays, canvasWidth };
+  return {
+    viewStart: startOfDay(rawStart),
+    viewEnd: startOfDay(rawEnd),
+  };
 }

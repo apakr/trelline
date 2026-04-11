@@ -37,6 +37,7 @@ export interface Workspace {
   name: string;
   rows: Row[];
   zoom: ZoomLevel;
+  scrollCenterDate?: string; // YYYY-MM-DD, center of viewport when last closed
   lastOpened: string;      // ISO 8601
 }
 

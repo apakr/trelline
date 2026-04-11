@@ -8,7 +8,11 @@ const ZOOM_LABELS: Record<ZoomLevel, string> = {
   months: "Months",
 };
 
-export default function TopBar() {
+interface TopBarProps {
+  onScrollToToday?: () => void;
+}
+
+export default function TopBar({ onScrollToToday }: TopBarProps) {
   const { closeWorkspace, setPanel } = useWorkspace();
   const { workspace, setZoom, renameWorkspace } = useLoadedWorkspace();
 
@@ -79,6 +83,14 @@ export default function TopBar() {
           </button>
         ))}
       </div>
+
+      {/* Today button */}
+      <button
+        onClick={onScrollToToday}
+        className="rounded border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+      >
+        Today
+      </button>
 
       {/* New task button */}
       <button

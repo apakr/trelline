@@ -36,6 +36,13 @@ dateToX(date, viewStart, viewEnd, canvasWidth): number
 ```
 Every rendered element — bars, grid lines, arrows, the date axis, the today line — derives its position from this function.
 
+**The canvas uses virtual rendering + extend-on-demand:**
+- `viewStart`/`viewEnd` = the total canvas date range. Starts from task bounds + padding; grows as the user scrolls past the edge.
+- `renderStart`/`renderEnd` = the window of SVG elements actually in the DOM = visible viewport + ~1.5x buffer. Only elements within this window are created; elements outside are not rendered.
+- A `requestAnimationFrame`-batched scroll handler triggers a React re-render only when scroll crosses a buffer boundary.
+- Left-side extension adjusts `scrollLeft` by `newDays * pxPerDay` to prevent jumping.
+- `scrollCenterDate` is saved to `workspace.json` (debounced) and restored on open.
+
 ### Component tree
 ```
 App

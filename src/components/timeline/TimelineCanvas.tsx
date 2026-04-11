@@ -1,12 +1,15 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useEffect, useCallback, useState, useLayoutEffect } from "react";
 import {
   addDays,
   addWeeks,
   addMonths,
+  subDays,
   startOfISOWeek,
   startOfMonth,
   getDaysInMonth,
+  differenceInDays,
   isBefore,
+  isAfter,
   format,
   getDay,
   getISOWeek,
@@ -15,7 +18,7 @@ import {
 } from "date-fns";
 import type { Row, Task, ZoomLevel } from "../../types";
 import { computeEffectiveStatus } from "../../types";
-import { dateToX, getViewBounds, pxPerDay } from "../../lib/dateToX";
+import { dateToX, xToDate, getInitialBounds, pxPerDay } from "../../lib/dateToX";
 
 // ---------------------------------------------------------------------------
 // Layout constants — must match RowPanel.tsx
@@ -44,25 +47,34 @@ function buildColumns(
   viewStart: Date,
   viewEnd: Date,
   canvasWidth: number,
-  zoom: ZoomLevel
+  zoom: ZoomLevel,
+  renderStart: Date,
+  renderEnd: Date
 ): Column[] {
   const cols: Column[] = [];
   const px = pxPerDay(zoom);
 
   if (zoom === "days") {
-    let d = startOfDay(viewStart);
-    while (isBefore(d, viewEnd)) {
+    // Start from the later of viewStart and renderStart
+    let d = startOfDay(isBefore(viewStart, renderStart) ? renderStart : viewStart);
+    while (isBefore(d, viewEnd) && !isAfter(d, renderEnd)) {
       const x = dateToX(d, viewStart, viewEnd, canvasWidth);
       const dow = getDay(d); // 0 = Sun, 6 = Sat
       cols.push({ key: d.toISOString(), date: d, x, width: px, label: format(d, "d"), isWeekend: dow === 0 || dow === 6 });
       d = addDays(d, 1);
     }
   } else if (zoom === "weeks") {
-    let d = startOfISOWeek(viewStart); // Monday
-    let prevMonth = -1;
+    // Start from the ISO week that contains max(viewStart, renderStart)
+    const anchor = isBefore(viewStart, renderStart) ? renderStart : viewStart;
+    let d = startOfISOWeek(anchor);
+    if (isBefore(d, viewStart)) d = startOfISOWeek(viewStart);
+
+    let prevMonth = d.getMonth() - 1; // force first column to check for month start
     const seenMonths = new Set<number>();
     const monthKey = (date: Date) => date.getFullYear() * 12 + date.getMonth();
-    while (isBefore(d, viewEnd)) {
+
+    while (isBefore(d, viewEnd) && !isAfter(d, addDays(renderEnd, 7))) {
+      if (isAfter(d, renderEnd)) break;
       const x = dateToX(d, viewStart, viewEnd, canvasWidth);
       const isMonthStart = d.getMonth() !== prevMonth;
       prevMonth = d.getMonth();
@@ -76,9 +88,13 @@ function buildColumns(
       d = addWeeks(d, 1);
     }
   } else {
-    // months
-    let d = startOfMonth(viewStart);
-    while (isBefore(d, viewEnd)) {
+    // months — start from the month containing max(viewStart, renderStart)
+    const anchor = isBefore(viewStart, renderStart) ? renderStart : viewStart;
+    let d = startOfMonth(anchor);
+    if (isBefore(d, viewStart)) d = startOfMonth(viewStart);
+
+    while (isBefore(d, viewEnd) && !isAfter(d, addMonths(renderEnd, 1))) {
+      if (isAfter(d, renderEnd)) break;
       const nextMonth = addMonths(d, 1);
       const x = dateToX(d, viewStart, viewEnd, canvasWidth);
       const xEnd = dateToX(nextMonth, viewStart, viewEnd, canvasWidth);
@@ -97,46 +113,91 @@ export interface TimelineCanvasProps {
   sortedRows: Row[];
   tasks: Task[];
   zoom: ZoomLevel;
+  scrollCenterDate?: string;                         // from workspace, used only on mount
+  onScrollCenterDateChange?: (date: string) => void; // debounced, saves to disk
+  onRegisterScrollToToday?: (fn: () => void) => void;
 }
 
-export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanvasProps) {
-  // --- coordinate system ---
-  const { viewStart, viewEnd, canvasWidth } = useMemo(
-    () => getViewBounds(tasks, zoom),
-    [tasks, zoom]
-  );
+export default function TimelineCanvas({
+  sortedRows,
+  tasks,
+  zoom,
+  scrollCenterDate,
+  onScrollCenterDateChange,
+  onRegisterScrollToToday,
+}: TimelineCanvasProps) {
+  const today = startOfDay(new Date());
 
+  // Capture scrollCenterDate at mount only — never changes after that
+  const initialScrollCenterDateRef = useRef(scrollCenterDate);
+
+  // --- viewStart/viewEnd as state (grow via extend-on-demand) ---
+  // If scrollCenterDate falls outside the task-derived bounds (user had scrolled
+  // far away), extend the initial range to include it so columns render on open.
+  const [viewStart, setViewStart] = useState<Date>(() => {
+    const { viewStart } = getInitialBounds(tasks);
+    if (initialScrollCenterDateRef.current) {
+      const center = parseISO(initialScrollCenterDateRef.current);
+      if (isBefore(center, viewStart)) return subDays(center, 200);
+    }
+    return viewStart;
+  });
+  const [viewEnd, setViewEnd] = useState<Date>(() => {
+    const { viewEnd } = getInitialBounds(tasks);
+    if (initialScrollCenterDateRef.current) {
+      const center = parseISO(initialScrollCenterDateRef.current);
+      if (isAfter(center, viewEnd)) return addDays(center, 200);
+    }
+    return viewEnd;
+  });
+
+  // canvasWidth derived from state
+  const totalDays   = differenceInDays(viewEnd, viewStart);
+  const canvasWidth = totalDays * pxPerDay(zoom);
+
+  // --- render window: only elements within this range exist in the DOM ---
+  const BUFFER_DAYS = 180;
+  const initialCenter = initialScrollCenterDateRef.current
+    ? parseISO(initialScrollCenterDateRef.current)
+    : today;
+  const [renderStart, setRenderStart] = useState<Date>(() => subDays(initialCenter, BUFFER_DAYS));
+  const [renderEnd,   setRenderEnd]   = useState<Date>(() => addDays(initialCenter, BUFFER_DAYS));
+
+  // --- columns (filtered to render window) ---
   const columns = useMemo(
-    () => buildColumns(viewStart, viewEnd, canvasWidth, zoom),
-    [viewStart, viewEnd, canvasWidth, zoom]
+    () => buildColumns(viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd),
+    [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd]
   );
 
-  // --- week start positions for months zoom header ---
+  // --- week start positions for months zoom header (filtered to render window) ---
   const monthZoomWeekStarts = useMemo(() => {
     if (zoom !== "months") return [];
     const result: Array<{ date: Date; x: number }> = [];
-    let d = startOfISOWeek(viewStart);
-    while (isBefore(d, viewEnd)) {
+    const anchor = isBefore(viewStart, renderStart) ? renderStart : viewStart;
+    let d = startOfISOWeek(anchor);
+    if (isBefore(d, viewStart)) d = startOfISOWeek(viewStart);
+    while (isBefore(d, viewEnd) && !isAfter(d, addDays(renderEnd, 7))) {
       result.push({ date: d, x: dateToX(d, viewStart, viewEnd, canvasWidth) });
       d = addWeeks(d, 1);
     }
     return result;
-  }, [viewStart, viewEnd, canvasWidth, zoom]);
+  }, [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd]);
 
-  // --- month start positions for weeks zoom (exact 1st-of-month x) ---
+  // --- month start positions for weeks zoom (filtered to render window) ---
   const weekZoomMonthStarts = useMemo(() => {
     if (zoom !== "weeks") return [];
     const result: Array<{ date: Date; x: number }> = [];
-    let d = startOfMonth(viewStart);
-    while (isBefore(d, viewEnd)) {
+    const anchor = isBefore(viewStart, renderStart) ? renderStart : viewStart;
+    let d = startOfMonth(anchor);
+    if (isBefore(d, viewStart)) d = startOfMonth(viewStart);
+    while (isBefore(d, viewEnd) && !isAfter(d, addMonths(renderEnd, 1))) {
       result.push({ date: d, x: dateToX(d, viewStart, viewEnd, canvasWidth) });
       d = addMonths(d, 1);
     }
     return result;
-  }, [viewStart, viewEnd, canvasWidth, zoom]);
+  }, [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd]);
 
   // --- today line ---
-  const today = startOfDay(new Date());
   const todayX = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom) / 2;
   const todayVisible = todayX >= 0 && todayX <= canvasWidth;
 
@@ -154,10 +215,136 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
   const svgHeight = HEADER_HEIGHT + sortedRows.length * ROW_HEIGHT;
 
   // ---------------------------------------------------------------------------
+  // Scroll refs
+  // ---------------------------------------------------------------------------
+  const containerRef        = useRef<HTMLDivElement>(null);
+  const pendingScrollAdjRef  = useRef(0);          // left-extension compensation (px)
+  const rafRef               = useRef<number | null>(null);
+  const saveCenterTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevZoomRef          = useRef(zoom);
+
+  // Tracks the current viewport center date in real time.
+  // Updated on every scroll, after scrollToToday, and after mount scroll.
+  // Used by the zoom transition so it never has to read c.scrollLeft after a
+  // re-render (by which point the browser may have already clamped it).
+  const currentCenterDateRef = useRef<Date>(initialCenter);
+
+  // Keep a ref with current values so the rAF callback never reads stale closures
+  const scrollStateRef = useRef({ viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd });
+  scrollStateRef.current = { viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd };
+
+  // ---------------------------------------------------------------------------
+  // useLayoutEffect — apply left-extension scroll compensation AFTER DOM update
+  // ---------------------------------------------------------------------------
+  useLayoutEffect(() => {
+    if (pendingScrollAdjRef.current !== 0 && containerRef.current) {
+      containerRef.current.scrollLeft += pendingScrollAdjRef.current;
+      pendingScrollAdjRef.current = 0;
+    }
+  }, [viewStart]); // runs after viewStart state update has widened the SVG
+
+  // ---------------------------------------------------------------------------
+  // Zoom transition — preserve viewport center date when zoom changes.
+  // Uses currentCenterDateRef (updated continuously) instead of reading
+  // c.scrollLeft, which the browser clamps before this effect ever fires.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    if (prevZoomRef.current !== zoom) {
+      const centerDate = currentCenterDateRef.current;
+      const newCenterX = dateToX(centerDate, viewStart, viewEnd, canvasWidth);
+      c.scrollLeft = Math.max(0, newCenterX - c.clientWidth / 2);
+      prevZoomRef.current = zoom;
+    }
+  }, [zoom, viewStart, viewEnd, canvasWidth]);
+
+  // ---------------------------------------------------------------------------
+  // Initial scroll — restore saved center date or default to today
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const centerDate = initialScrollCenterDateRef.current
+      ? parseISO(initialScrollCenterDateRef.current)
+      : today;
+    currentCenterDateRef.current = centerDate;
+    const centerX = dateToX(centerDate, viewStart, viewEnd, canvasWidth);
+    c.scrollLeft = Math.max(0, centerX - c.clientWidth / 2);
+  }, []); // mount only — eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---------------------------------------------------------------------------
+  // scrollToToday
+  // ---------------------------------------------------------------------------
+  const scrollToToday = useCallback(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    currentCenterDateRef.current = today;
+    const todayXCenter = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom) / 2;
+    c.scrollLeft = Math.max(0, todayXCenter - c.clientWidth / 2);
+  }, [viewStart, viewEnd, canvasWidth, zoom]);
+
+  useEffect(() => {
+    onRegisterScrollToToday?.(scrollToToday);
+  }, [scrollToToday, onRegisterScrollToToday]);
+
+  // ---------------------------------------------------------------------------
+  // Scroll handler — rAF batched
+  // ---------------------------------------------------------------------------
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    const sl = e.currentTarget.scrollLeft;
+    const vw = containerRef.current!.clientWidth;
+
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+
+      const { viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd } = scrollStateRef.current;
+
+      const bufferPx = vw * 1.5;
+      const safeZone = bufferPx * 0.5; // inner zone where no re-render is needed
+
+      // Update render window if scroll has moved past the safe zone
+      const rsX = dateToX(renderStart, viewStart, viewEnd, canvasWidth);
+      const reX = dateToX(renderEnd,   viewStart, viewEnd, canvasWidth);
+      if (sl - safeZone < rsX || sl + vw + safeZone > reX) {
+        const newRS = xToDate(Math.max(0,          sl - bufferPx),       viewStart, viewEnd, canvasWidth);
+        const newRE = xToDate(Math.min(canvasWidth, sl + vw + bufferPx), viewStart, viewEnd, canvasWidth);
+        setRenderStart(newRS);
+        setRenderEnd(newRE);
+      }
+
+      // Extend left
+      const EXTEND_DAYS = 500;
+      const EXTEND_THRESHOLD = vw;
+      if (sl < EXTEND_THRESHOLD) {
+        pendingScrollAdjRef.current += EXTEND_DAYS * pxPerDay(zoom);
+        setViewStart(prev => subDays(prev, EXTEND_DAYS));
+      }
+
+      // Extend right
+      if (sl > canvasWidth - vw - EXTEND_THRESHOLD) {
+        setViewEnd(prev => addDays(prev, EXTEND_DAYS));
+      }
+
+      // Always keep center date ref current
+      currentCenterDateRef.current = xToDate(sl + vw / 2, viewStart, viewEnd, canvasWidth);
+
+      // Debounced save of scroll center date
+      if (saveCenterTimerRef.current) clearTimeout(saveCenterTimerRef.current);
+      saveCenterTimerRef.current = setTimeout(() => {
+        onScrollCenterDateChange?.(format(currentCenterDateRef.current, 'yyyy-MM-dd'));
+      }, 1000);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
   return (
     <div
+      ref={containerRef}
+      onScroll={handleScroll}
       className="relative flex-1 overflow-auto bg-[var(--color-bg-base)]"
       style={{ minWidth: 0 }}
     >
@@ -168,6 +355,10 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
           {tasks.map((task) => {
             const rowY = rowYMap.get(task.rowId);
             if (rowY === undefined) return null;
+            // Only create clip paths for tasks in the render window
+            const taskStart = parseISO(task.start);
+            const taskEnd   = addDays(parseISO(task.end), 1);
+            if (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart)) return null;
             const x = dateToX(parseISO(task.start), viewStart, viewEnd, canvasWidth);
             const xEnd = dateToX(addDays(parseISO(task.end), 1), viewStart, viewEnd, canvasWidth);
             const w = xEnd - x;
@@ -289,6 +480,11 @@ export default function TimelineCanvas({ sortedRows, tasks, zoom }: TimelineCanv
         {tasks.map((task) => {
           const rowY = rowYMap.get(task.rowId);
           if (rowY === undefined) return null;
+
+          // Overlap check — render if any part of the task is in the render window
+          const taskStart = parseISO(task.start);
+          const taskEnd   = addDays(parseISO(task.end), 1);
+          if (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart)) return null;
 
           const x = dateToX(parseISO(task.start), viewStart, viewEnd, canvasWidth);
           const xEnd = dateToX(addDays(parseISO(task.end), 1), viewStart, viewEnd, canvasWidth);

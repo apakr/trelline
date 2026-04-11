@@ -45,6 +45,7 @@ my-workspace/
     { "id": "row_2", "name": "Travel + Lodging", "order": 1, "color": "#34d399" }
   ],
   "zoom": "weeks",
+  "scrollCenterDate": "2026-05-01",
   "lastOpened": "2026-04-07T10:00:00Z"
 }
 ```
@@ -110,6 +111,21 @@ The canvas is a custom SVG rendered by React. It has two horizontal sections: a 
 - **Task bars** appear on their respective row, spanning their start→end dates
 - **Multiple tasks per row** — tasks that do not overlap in time appear side by side on the same row; overlapping tasks stack into sub-lanes within the row, and the row height expands to fit
 - **Milestones** render as a diamond (◆) shape; stored and treated as a 1-day task
+
+### Canvas Rendering — Virtual Rendering + Extend-on-Demand
+
+The canvas uses two complementary mechanisms to handle arbitrarily large date ranges without performance issues:
+
+**Virtual rendering:** Only SVG elements within the visible viewport plus a buffer (~1.5x viewport width on each side) exist in the DOM at any time. Elements outside this render window are not created. When the user scrolls far enough to approach the buffer edge, the render window shifts and old elements are removed.
+
+**Extend-on-demand:** The total canvas date range (`viewStart`/`viewEnd`) starts from task bounds + padding. When the user scrolls close to either edge, the range extends outward by a chunk (~500 days), growing the scrollbar. Left-side extension simultaneously adjusts `scrollLeft` by `newDays * pxPerDay` so the viewport does not jump.
+
+**Scroll position persistence:** The center date of the viewport is saved to `workspace.json` as `scrollCenterDate` (debounced). Reopening a workspace restores the scroll position.
+
+**Correctness requirements:**
+- Task bars that partially overlap the render window boundary still render
+- Dependency arrows that cross the render window boundary compute positions correctly
+- Zoom changes immediately recompute the render window
 
 ### Zoom Levels
 

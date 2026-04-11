@@ -2,6 +2,7 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useRef,
   useState,
 } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -47,6 +48,7 @@ interface WorkspaceContextValue {
   closeWorkspace: () => void;
   renameWorkspace: (name: string) => Promise<void>;
   setZoom: (zoom: ZoomLevel) => Promise<void>;
+  setScrollCenterDate: (date: string) => Promise<void>;
 
   // Recent workspaces
   refreshAppConfig: () => Promise<void>;
@@ -90,6 +92,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Tracks scrollCenterDate out-of-band (no setState → no re-renders on scroll save).
+  // Must be kept in sync when workspaces are loaded/closed and injected into every
+  // saveWorkspace call so it is never overwritten by other saves.
+  const scrollCenterDateRef = useRef<string | undefined>(undefined);
+
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
@@ -109,6 +116,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     return updated;
   }
 
+  // Injects the latest scrollCenterDate into any workspace object before saving,
+  // so it is never overwritten by unrelated saves (zoom change, rename, etc.).
+  function withScrollCenter(workspace: import("../types").Workspace): import("../types").Workspace {
+    const date = scrollCenterDateRef.current;
+    return date !== undefined ? { ...workspace, scrollCenterDate: date } : workspace;
+  }
+
   // -------------------------------------------------------------------------
   // Workspace lifecycle
   // -------------------------------------------------------------------------
@@ -123,6 +137,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     try {
       const state = await openWorkspace(folderPath);
+      scrollCenterDateRef.current = state.workspace.scrollCenterDate;
       setWorkspaceState(state);
       setPanel({ type: "none" });
       await addRecentWorkspace({
@@ -150,6 +165,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setError(null);
       try {
         const state = await fsCreateWorkspace(folderPath, name);
+        scrollCenterDateRef.current = undefined;
         setWorkspaceState(state);
         setPanel({ type: "none" });
         await addRecentWorkspace({
@@ -168,6 +184,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   );
 
   const closeWorkspace = useCallback(() => {
+    scrollCenterDateRef.current = undefined;
     setWorkspaceState(null);
     setPanel({ type: "none" });
   }, []);
@@ -175,7 +192,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const renameWorkspace = useCallback(async (name: string) => {
     const current = requireState();
     const updated = updateWorkspaceInState({ name });
-    await saveWorkspace(current.folderPath, updated.workspace);
+    await saveWorkspace(current.folderPath, withScrollCenter(updated.workspace));
     await addRecentWorkspace({
       folderPath: current.folderPath,
       name,
@@ -187,7 +204,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const setZoom = useCallback(async (zoom: ZoomLevel) => {
     const current = requireState();
     const updated = updateWorkspaceInState({ zoom });
-    await saveWorkspace(current.folderPath, updated.workspace);
+    await saveWorkspace(current.folderPath, withScrollCenter(updated.workspace));
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const forgetRecentWorkspace = useCallback(async (folderPath: string) => {
@@ -209,7 +226,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     };
     const updatedRows = [...current.workspace.rows, row];
     const next = updateWorkspaceInState({ rows: updatedRows });
-    await saveWorkspace(current.folderPath, next.workspace);
+    await saveWorkspace(current.folderPath, withScrollCenter(next.workspace));
     return row;
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -220,7 +237,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         r.id === rowId ? { ...r, ...updates } : r
       );
       const next = updateWorkspaceInState({ rows: updatedRows });
-      await saveWorkspace(current.folderPath, next.workspace);
+      await saveWorkspace(current.folderPath, withScrollCenter(next.workspace));
     },
     [workspaceState] // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -232,7 +249,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       .filter((id) => rowMap.has(id))
       .map((id, index) => ({ ...rowMap.get(id)!, order: index }));
     const next = updateWorkspaceInState({ rows: updatedRows });
-    await saveWorkspace(current.folderPath, next.workspace);
+    await saveWorkspace(current.folderPath, withScrollCenter(next.workspace));
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const deleteRow = useCallback(async (rowId: string) => {
@@ -268,7 +285,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       tasks: remainingTasks,
     };
     setWorkspaceState(next);
-    await saveWorkspace(current.folderPath, next.workspace);
+    await saveWorkspace(current.folderPath, withScrollCenter(next.workspace));
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // -------------------------------------------------------------------------
@@ -351,6 +368,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // -------------------------------------------------------------------------
+  // Scroll center date persistence
+  // -------------------------------------------------------------------------
+
+  const setScrollCenterDate = useCallback(async (date: string) => {
+    const { workspace, folderPath } = requireState();
+    scrollCenterDateRef.current = date;
+    // Write to disk only — no setState, no re-render cascade into canvas
+    await saveWorkspace(folderPath, { ...workspace, scrollCenterDate: date });
+  }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
 
@@ -366,6 +394,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     closeWorkspace,
     renameWorkspace,
     setZoom,
+    setScrollCenterDate,
 
     refreshAppConfig,
     forgetRecentWorkspace,
