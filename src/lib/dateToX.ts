@@ -16,7 +16,7 @@ import type { Task, ZoomLevel } from "../types";
 const PX_PER_DAY_MAP: Record<ZoomLevel, number> = {
   days: 40,    // 40px / day  → columns are clearly readable
   weeks: 17,   // ~119px / week
-  months: 5,   // ~150px / month
+  months: 8,   // ~240px / month
 };
 
 export function pxPerDay(zoom: ZoomLevel): number {
