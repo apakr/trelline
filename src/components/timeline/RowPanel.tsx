@@ -1,16 +1,27 @@
 import type { Row } from "../../types";
 
-/** Height of one Frappe task row in pixels (bar_height=30 + padding=18). */
-export const FRAPPE_ROW_HEIGHT = 48;
+/**
+ * ROW_HEIGHT: Fixed height per row in pixels.
+ *
+ * TEMPORARY — when the custom canvas is built, rows will expand based on how
+ * many task sub-lanes are needed (overlap stacking). RowPanel will receive a
+ * rowHeights prop from TimelineView instead of using this constant.
+ * See CANVAS_INTEGRATION_NOTES.md.
+ */
+export const ROW_HEIGHT = 48;
 
-/** Height of Frappe's sticky header in pixels (upper=45 + lower=30 + 10). */
-export const FRAPPE_HEADER_HEIGHT = 85;
+/**
+ * HEADER_HEIGHT: Height of the top section of RowPanel in pixels.
+ *
+ * MUST match the canvas date axis header height exactly so row labels align
+ * with canvas row bands. Set this to match when the canvas is built.
+ * See CANVAS_INTEGRATION_NOTES.md.
+ */
+export const HEADER_HEIGHT = 52;
 
 interface RowPanelProps {
   rows: Row[];
-  /** Number of real tasks per row (0 → row still occupies one slot). */
   taskCountByRowId: Map<string, number>;
-  bodyRef: React.RefObject<HTMLDivElement | null>;
   onAddRow: () => void;
   onDeleteRow: (rowId: string) => void;
 }
@@ -18,7 +29,6 @@ interface RowPanelProps {
 export default function RowPanel({
   rows,
   taskCountByRowId,
-  bodyRef,
   onAddRow,
   onDeleteRow,
 }: RowPanelProps) {
@@ -27,10 +37,10 @@ export default function RowPanel({
       className="flex w-[220px] flex-shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-surface)]"
       style={{ height: "100%" }}
     >
-      {/* Header — must be exactly FRAPPE_HEADER_HEIGHT px to align with Frappe's date header */}
+      {/* Header */}
       <div
         className="flex flex-shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3"
-        style={{ height: FRAPPE_HEADER_HEIGHT }}
+        style={{ height: HEADER_HEIGHT }}
       >
         <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
           Rows
@@ -47,33 +57,25 @@ export default function RowPanel({
         </button>
       </div>
 
-      {/* Body — overflow:hidden; scrollTop is driven externally by scroll-sync */}
-      <div
-        ref={bodyRef}
-        className="overflow-hidden"
-        style={{ flex: 1 }}
-      >
+      {/* Row list */}
+      <div className="overflow-hidden" style={{ flex: 1 }}>
         {rows.length === 0 ? (
           <div
             className="flex items-center justify-center text-xs text-[var(--color-text-secondary)]"
-            style={{ height: FRAPPE_ROW_HEIGHT }}
+            style={{ height: ROW_HEIGHT }}
           >
             No rows yet
           </div>
         ) : (
-          rows.map((row) => {
-            const count = Math.max(1, taskCountByRowId.get(row.id) ?? 0);
-            const rowHeightPx = count * FRAPPE_ROW_HEIGHT;
-            return (
-              <RowItem
-                key={row.id}
-                row={row}
-                taskCount={taskCountByRowId.get(row.id) ?? 0}
-                height={rowHeightPx}
-                onDelete={() => onDeleteRow(row.id)}
-              />
-            );
-          })
+          rows.map((row) => (
+            <RowItem
+              key={row.id}
+              row={row}
+              taskCount={taskCountByRowId.get(row.id) ?? 0}
+              height={ROW_HEIGHT}
+              onDelete={() => onDeleteRow(row.id)}
+            />
+          ))
         )}
       </div>
     </div>

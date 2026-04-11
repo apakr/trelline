@@ -2,7 +2,9 @@
 
 ## Overview
 
-A standalone desktop application (Tauri + React) that replicates and extends Asana's Timeline view. Single-user, fully offline, data stored as JSON files on the local filesystem. The app feels like a polished native desktop product — not a web app in a window.
+A standalone desktop application (Tauri + React) that replicates Asana's Timeline view exactly. Single-user, fully offline, data stored as JSON files on the local filesystem. The app feels like a polished native desktop product — not a web app in a window.
+
+The timeline canvas is built entirely from scratch using SVG and React. No third-party Gantt library is used. This is a deliberate decision: Gantt libraries impose constraints on layout, interaction, and rendering that conflict with exactly replicating Asana's behavior. Every pixel, every interaction, every animation is custom-built.
 
 ---
 
@@ -12,8 +14,9 @@ A standalone desktop application (Tauri + React) that replicates and extends Asa
 |---|---|---|
 | Desktop shell | Tauri (Rust) | Lightweight native app, direct filesystem access, no Electron bloat |
 | Frontend | React + TypeScript | Component model fits complex interactive UI |
-| Gantt rendering | Frappe Gantt | MIT licensed, handles bar rendering, drag-to-move, drag-to-resize |
+| Timeline rendering | Custom SVG (React) | Full control over layout, interaction, and behavior — no library compromises |
 | Styling | Tailwind CSS | Utility-first, fast iteration |
+| Date math | date-fns | Already installed, handles all date arithmetic |
 | Data | JSON files (one per task) | Portable, human-readable, no database process needed |
 
 ---
@@ -79,7 +82,7 @@ my-workspace/
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  [App name]  [Workspace name ▾]          [+ New Task] [⚙]  │  ← Top bar
+│  [App name]  [Workspace name ▾]   [Today] [+ New Task] [⚙]  │  ← Top bar
 ├──────────┬──────────────────────────────────────────────────┤
 │          │  Apr 26  27  28  29  30 │ May 1   2   3   4   5  │  ← Date axis
 │  Row nav │─────────────────────────────────────────────────  │
@@ -99,13 +102,17 @@ my-workspace/
 
 ### Timeline Canvas
 
-- **Date axis** runs left to right across the top
-- **Vertical red line** marks today's date, always visible, updates in real time
-- **Rows** run horizontally, listed on the left panel
+The canvas is a custom SVG rendered by React. It has two horizontal sections: a fixed left panel (row labels) and a scrollable right section (the date axis + task bars). Vertical scroll moves both sections together. Horizontal scroll moves only the right section.
+
+- **Date axis** runs left to right across the top of the scrollable section
+- **Vertical red line** marks today's date; scrolls off screen when the user pans away from today
+- **Rows** run horizontally across the full canvas height
 - **Task bars** appear on their respective row, spanning their start→end dates
-- **Milestones** render as a diamond (◆) shape on a single day
+- **Multiple tasks per row** — tasks that do not overlap in time appear side by side on the same row; overlapping tasks stack into sub-lanes within the row, and the row height expands to fit
+- **Milestones** render as a diamond (◆) shape; stored and treated as a 1-day task
 
 ### Zoom Levels
+
 Three zoom levels toggled via a control in the top bar:
 - **Days** — each column = 1 day
 - **Weeks** — each column = 1 week (default)
@@ -113,36 +120,65 @@ Three zoom levels toggled via a control in the top bar:
 
 Zoom level is persisted per workspace in `workspace.json`.
 
+**Zoom transition behavior:** When switching zoom levels, the viewport stays centered on whatever date range is currently visible — it does not jump to today. The visible date at the center of the viewport before switching should remain the center after switching.
+
+### Today Button
+
+A **[Today]** button in the top bar scrolls the canvas back to today's date when clicked, centering the viewport on today. This is the only way to return to today after panning away.
+
 ### Task Bars
 
 **Appearance:**
 - Rounded rectangle with task title truncated inside
+- Minimum task length: 1 day. Tasks cannot be shorter than 1 day.
 - Color is per-task (user-defined, defaults to row color)
 - Status affects appearance:
   - `not_done` — full color
   - `done` — desaturated/muted with a checkmark icon on the bar
   - `overdue` — red tint/border, computed automatically
 
+**Drag snapping:** All drag interactions (move and resize) snap to whole day boundaries regardless of zoom level. A task always starts and ends on a whole day.
+
 **Interactions:**
-- **Drag bar** — moves task left/right, updating start and end dates. Connected arrow lines follow visually but connected tasks do NOT move.
-- **Drag left edge** — changes start date only
-- **Drag right edge** — changes end date only
+- **Drag bar** — moves task left/right, snapping to day boundaries, updating start and end dates. Connected dependency arrows follow visually but connected tasks do NOT move.
+- **Drag left edge** — changes start date only, snaps to day boundaries. Cannot drag past the end date (minimum 1 day length enforced).
+- **Drag right edge** — changes end date only, snaps to day boundaries. Cannot drag past the start date.
 - **Click** — opens the Task Detail Panel (right sidebar)
 - **Hover** — shows connector dots on left and right edges for drawing dependency arrows
 
+### Overlapping Tasks Within a Row
+
+When two or more tasks in the same row overlap in time, they stack into sub-lanes vertically within the row. Row height expands to accommodate all sub-lanes.
+
+- **Stacking order:** The task that was created first occupies the top sub-lane. Tasks added later go below. This order is fixed by creation time unless the user manually changes it.
+- **Manual reorder:** The user can drag a task bar up or down within a row to change its sub-lane position. Dragging it above the top sub-lane moves it to position 1; dragging below the bottom creates a new sub-lane.
+- Sub-lane order is stored per-row and persisted.
+
 ### Dependency Arrows
 
-- Hover a task bar → small circular connector dots appear on left and right edges
-- Drag from a connector dot to another task → draws a curved arrow line between them
-- Arrow is purely visual/informational, no logic or auto-shifting
-- Arrow is stored as a dependency reference in the source task's JSON file (`dependencies` array holds target task IDs)
-- Click an arrow line → shows a delete option
-- Arrows render on a canvas layer beneath the task bars
+Dependency arrows follow the Asana finish-to-start model:
+- An arrow always goes from the **right edge** of the predecessor task to the **left edge** of the successor task
+- Direction is always left-to-right (predecessor finishes → successor starts)
+- Arrows work across rows
+
+**Creating a dependency:**
+- Hover a task bar → small circular connector dots appear on the left and right edges
+- Drag from the **right** connector dot of task A and drop onto task B → creates a dependency (A must finish before B starts), arrow draws from A's right edge to B's left edge
+- Drag from the **left** connector dot of task B and drop onto task A → same result, same arrow direction
+- A live preview arrow follows the cursor while dragging
+
+**Removing a dependency:**
+- Click an existing arrow line → a small delete button appears on the arrow; click it to remove
+
+**Visual:**
+- Arrows render on an SVG layer beneath the task bars
+- Arrow is stored in the source task's `dependencies` array (holds target task IDs)
+- Arrow is purely visual/informational — no auto-shifting or scheduling logic
 
 ### Row Management (Left Panel)
 
-- Rows listed vertically on the left
-- **Drag to reorder** rows
+- Rows listed vertically on the left, fixed width, does not scroll horizontally
+- **Drag to reorder** rows (reorders the entire row and all its tasks together)
 - **Double-click** row name to rename inline
 - **Right-click** row → context menu with: Rename, Change color, Delete
 - **[+ Add Row]** button at the bottom of the row list
@@ -176,7 +212,7 @@ Opens when a task is clicked. Contains:
 
 ## Visual Design Direction
 
-The app should feel like a **refined, modern productivity tool** — clean and calm like Linear or Notion, not cluttered. Dark mode preferred as default with light mode option.
+The app should feel like a **refined, modern productivity tool** — clean and calm like Linear or Notion, not cluttered. Dark mode preferred as default.
 
 - Neutral dark background (e.g. `#0f0f11`) with subtle surface layers
 - Task bars use vivid accent colors against the dark canvas for contrast
@@ -221,19 +257,19 @@ All file operations are async. The app holds workspace state in memory (React st
 
 When building this project:
 
-1. Scaffold with `npm create tauri-app` using the React + TypeScript template
-2. Install dependencies: `frappe-gantt`, `tailwindcss`, `date-fns`, `uuid`, `@tauri-apps/plugin-fs`, `@tauri-apps/plugin-dialog`
-3. Build the timeline canvas as a custom React component layered on top of Frappe Gantt — use Frappe for bar rendering and drag interactions, build the arrow/dependency layer as a separate SVG overlay
-4. All file I/O through Tauri fs plugin — no Node fs, no fetch, no backend
-5. Store last opened workspace path in Tauri's app local data dir using `@tauri-apps/plugin-store`
-6. One React context (`WorkspaceContext`) holds all in-memory state; persists to disk on every mutation
-7. Task IDs generated with `uuid v4`, prefixed `task_`
-8. Row IDs generated with `uuid v4`, prefixed `row_`
-9. Keep components small and focused — suggested structure:
+1. **Do not use any Gantt or timeline library** (no Frappe Gantt, no vis-timeline, no dhtmlx). The timeline canvas is custom SVG + React only.
+2. The core of the canvas is a coordinate function: `dateToX(date, viewStart, viewEnd, canvasWidth) → pixels`. Every rendered element uses this function. Build and validate this first before rendering anything.
+3. All file I/O through Tauri fs plugin — no Node fs, no fetch, no backend
+4. Store last opened workspace path in Tauri's local app config using `@tauri-apps/plugin-store`
+5. One React context (`WorkspaceContext`) holds all in-memory state; persists to disk on every mutation
+6. Task IDs generated with `uuid v4`, prefixed `task_`
+7. Row IDs generated with `uuid v4`, prefixed `row_`
+8. Keep components small and focused — structure:
    - `TimelineView` — main layout shell
-   - `RowPanel` — left sidebar with row list
-   - `TimelineCanvas` — the Frappe Gantt wrapper + arrow SVG layer
+   - `RowPanel` — fixed left sidebar with row labels
+   - `TimelineCanvas` — custom SVG canvas (date axis, grid, task bars, arrows)
    - `TaskDetailPanel` — right sidebar
    - `WorkspacePicker` — initial screen
    - `TopBar` — zoom controls, workspace name, new task button
-10. Write TypeScript types for all data structures before writing components
+9. Write TypeScript types for all data structures before writing components
+10. Build the canvas in layers, in this order: coordinate system → date axis → grid → row bands → task bars → scroll/zoom → drag interactions → dependency arrows → drag-to-create links

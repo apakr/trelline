@@ -16,7 +16,6 @@
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-store": "^2.4.2",
     "date-fns": "^4.1.0",
-    "frappe-gantt": "^1.2.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "uuid": "^13.0.0"
