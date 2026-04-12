@@ -56,13 +56,17 @@ interface WorkspaceContextValue {
 
   // Rows
   addRow: (name: string) => Promise<Row>;
-  updateRow: (rowId: string, updates: Partial<Pick<Row, "name" | "color">>) => Promise<void>;
+  updateRow: (rowId: string, updates: Partial<Pick<Row, "name" | "color" | "laneCount">>) => Promise<void>;
   reorderRows: (orderedIds: string[]) => Promise<void>;
   deleteRow: (rowId: string) => Promise<void>;
 
   // Tasks
   createTask: (partial: NewTaskInput) => Promise<Task>;
   updateTask: (taskId: string, updates: Partial<Omit<Task, "id" | "createdAt">>) => Promise<void>;
+  batchUpdateTasks: (
+    updates: Array<{ taskId: string; changes: Partial<Omit<Task, "id" | "createdAt">> }>,
+    rowUpdate?: { rowId: string; laneCount: number }
+  ) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
 
   // UI
@@ -224,6 +228,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       name,
       order: current.workspace.rows.length,
       color: DEFAULT_ROW_COLOR,
+      laneCount: 1,
     };
     const updatedRows = [...current.workspace.rows, row];
     const next = updateWorkspaceInState({ rows: updatedRows });
@@ -232,7 +237,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateRow = useCallback(
-    async (rowId: string, updates: Partial<Pick<Row, "name" | "color">>) => {
+    async (rowId: string, updates: Partial<Pick<Row, "name" | "color" | "laneCount">>) => {
       const current = requireState();
       const updatedRows = current.workspace.rows.map((r) =>
         r.id === rowId ? { ...r, ...updates } : r
@@ -301,6 +306,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     // Coerce milestone: end must equal start
     const end = input.isMilestone ? input.start : input.end;
 
+    // New tasks go to the bottom of their row's stacking order
+    const rowOrders = current.tasks.filter(t => t.rowId === input.rowId).map(t => t.rowOrder);
+    const rowOrder = rowOrders.length > 0 ? Math.max(...rowOrders) + 1 : 0;
+
     const task: Task = {
       id: `task_${uuidv4()}`,
       title: input.title,
@@ -312,6 +321,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       isMilestone: input.isMilestone ?? false,
       notes: input.notes ?? "",
       dependencies: [],
+      rowOrder,
+      lane: 0,
       createdAt: now,
       updatedAt: now,
     };
@@ -337,6 +348,56 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const updatedTasks = current.tasks.map((t) => (t.id === taskId ? merged : t));
       setWorkspaceState({ ...current, tasks: updatedTasks });
       await saveTask(current.folderPath, merged);
+    },
+    [workspaceState] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  /**
+   * Updates multiple tasks atomically — all changes are applied to state in one
+   * setWorkspaceState call, then written to disk in parallel.
+   * Use this instead of sequential updateTask calls to avoid stale-closure races.
+   */
+  /**
+   * Updates multiple tasks AND optionally a row's laneCount in one atomic
+   * setWorkspaceState call. Avoids the stale-closure overwrite that happens
+   * when batchUpdateTasks + updateRow are called sequentially (the second
+   * call reads old state and discards the first call's changes).
+   */
+  const batchUpdateTasks = useCallback(
+    async (
+      updates: Array<{ taskId: string; changes: Partial<Omit<Task, "id" | "createdAt">> }>,
+      rowUpdate?: { rowId: string; laneCount: number }
+    ) => {
+      if (updates.length === 0 && !rowUpdate) return;
+      const current = requireState();
+      const now = new Date().toISOString();
+      const updateMap = new Map(updates.map((u) => [u.taskId, u.changes]));
+
+      const updatedTasks = current.tasks.map((t) => {
+        const changes = updateMap.get(t.id);
+        if (!changes) return t;
+        let merged = { ...t, ...changes, updatedAt: now };
+        if (merged.isMilestone) merged = { ...merged, end: merged.start };
+        return merged;
+      });
+
+      const updatedRows = rowUpdate
+        ? current.workspace.rows.map((r) =>
+            r.id === rowUpdate.rowId ? { ...r, laneCount: rowUpdate.laneCount } : r
+          )
+        : current.workspace.rows;
+
+      const next: WorkspaceState = {
+        ...current,
+        workspace: { ...current.workspace, rows: updatedRows },
+        tasks: updatedTasks,
+      };
+      setWorkspaceState(next);
+
+      await Promise.all([
+        ...updatedTasks.filter((t) => updateMap.has(t.id)).map((t) => saveTask(current.folderPath, t)),
+        ...(rowUpdate ? [saveWorkspace(current.folderPath, withScrollCenter(next.workspace))] : []),
+      ]);
     },
     [workspaceState] // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -407,6 +468,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
     createTask,
     updateTask,
+    batchUpdateTasks,
     deleteTask,
 
     setPanel,

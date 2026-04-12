@@ -46,7 +46,12 @@ export async function openWorkspace(folderPath: string): Promise<WorkspaceState>
     throw new Error(`Not a valid workspace — workspace.json not found in: ${folderPath}`);
   }
 
-  const workspace: Workspace = JSON.parse(await readTextFile(wsPath));
+  const raw = JSON.parse(await readTextFile(wsPath));
+  // laneCount was added after initial release — default to 1 for older rows
+  const workspace: Workspace = {
+    ...raw,
+    rows: (raw.rows ?? []).map((r: import("../types").Row) => ({ ...r, laneCount: r.laneCount ?? 1 })),
+  };
 
   // Read all task files
   const tasksDir = await tasksDirPath(folderPath);
@@ -58,7 +63,9 @@ export async function openWorkspace(folderPath: string): Promise<WorkspaceState>
       if (entry.name?.endsWith(".json")) {
         const taskPath = await join(tasksDir, entry.name);
         try {
-          const task: Task = JSON.parse(await readTextFile(taskPath));
+          const raw = JSON.parse(await readTextFile(taskPath));
+          // rowOrder was added after initial release — default to 0 for older files
+          const task: Task = { rowOrder: 0, lane: 0, ...raw };
           tasks.push(task);
         } catch {
           // Skip malformed task files — don't crash the whole workspace open

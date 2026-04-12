@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useLoadedWorkspace } from "../../context/WorkspaceContext";
+import { computeSubLanes } from "../../lib/subLanes";
 import TopBar from "./TopBar";
 import RowPanel from "./RowPanel";
 import TimelineCanvas from "./TimelineCanvas";
@@ -7,7 +8,7 @@ import NewTaskPanel from "./NewTaskPanel";
 import TaskDetailPanel from "./TaskDetailPanel";
 
 export default function TimelineView() {
-  const { workspace, tasks, addRow, deleteRow, setScrollCenterDate, panel } = useLoadedWorkspace();
+  const { workspace, tasks, addRow, updateRow, deleteRow, setScrollCenterDate, panel } = useLoadedWorkspace();
   const scrollToTodayRef = useRef<(() => void) | null>(null);
   const scrollToDateRef  = useRef<((date: Date) => void) | null>(null);
   const centerDateInputRef = useRef<HTMLInputElement>(null);
@@ -40,6 +41,32 @@ export default function TimelineView() {
     return map;
   }, [sortedRows, tasks]);
 
+  // Minimum lanes required by task overlaps (purely from task positions)
+  const { subLaneMap, rowLaneCount: rowMinLaneCount } = useMemo(
+    () => computeSubLanes(tasks),
+    [tasks]
+  );
+
+  // Effective lane count = max(user-stored laneCount, minimum needed by overlaps)
+  const rowLaneCount = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of sortedRows) {
+      map.set(row.id, Math.max(row.laneCount ?? 1, rowMinLaneCount.get(row.id) ?? 1));
+    }
+    return map;
+  }, [sortedRows, rowMinLaneCount]);
+
+  // Auto-increment row.laneCount when new task overlaps push the min above the stored value.
+  // Never auto-decrements — rows only shrink via the manual "-" button.
+  useEffect(() => {
+    for (const row of sortedRows) {
+      const min = rowMinLaneCount.get(row.id) ?? 1;
+      if (min > (row.laneCount ?? 1)) {
+        updateRow(row.id, { laneCount: min });
+      }
+    }
+  }, [rowMinLaneCount, sortedRows, updateRow]);
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[var(--color-bg-base)]">
       <TopBar
@@ -52,16 +79,31 @@ export default function TimelineView() {
         <RowPanel
           rows={sortedRows}
           taskCountByRowId={taskCountByRowId}
+          rowLaneCount={rowLaneCount}
+          rowMinLaneCount={rowMinLaneCount}
           onAddRow={async () => {
             const name = `Row ${sortedRows.length + 1}`;
             await addRow(name);
           }}
           onDeleteRow={deleteRow}
+          onAddLane={(rowId) => {
+            const row = sortedRows.find((r) => r.id === rowId);
+            if (row) updateRow(rowId, { laneCount: (row.laneCount ?? 1) + 1 });
+          }}
+          onRemoveLane={(rowId) => {
+            const row = sortedRows.find((r) => r.id === rowId);
+            if (!row) return;
+            const min = rowMinLaneCount.get(rowId) ?? 1;
+            const next = Math.max(1, (row.laneCount ?? 1) - 1);
+            if (next >= min) updateRow(rowId, { laneCount: next });
+          }}
         />
 
         <TimelineCanvas
           sortedRows={sortedRows}
           tasks={tasks}
+          subLaneMap={subLaneMap}
+          rowLaneCount={rowLaneCount}
           zoom={workspace.zoom}
           scrollCenterDate={initialScrollCenterDate.current}
           onScrollCenterDateChange={setScrollCenterDate}

@@ -113,6 +113,8 @@ function buildColumns(
 export interface TimelineCanvasProps {
   sortedRows: Row[];
   tasks: Task[];
+  subLaneMap: Map<string, number>;
+  rowLaneCount: Map<string, number>;
   zoom: ZoomLevel;
   scrollCenterDate?: string;                            // from workspace, used only on mount
   onScrollCenterDateChange?: (date: string) => void;   // debounced, saves to disk
@@ -124,6 +126,8 @@ export interface TimelineCanvasProps {
 export default function TimelineCanvas({
   sortedRows,
   tasks,
+  subLaneMap,
+  rowLaneCount,
   zoom,
   scrollCenterDate,
   onScrollCenterDateChange,
@@ -131,7 +135,7 @@ export default function TimelineCanvas({
   onRegisterScrollToToday,
   onRegisterScrollToDate,
 }: TimelineCanvasProps) {
-  const { setPanel, updateTask } = useLoadedWorkspace();
+  const { setPanel, updateTask, updateRow, batchUpdateTasks } = useLoadedWorkspace();
   const today = startOfDay(new Date());
 
   // Capture scrollCenterDate at mount only — never changes after that
@@ -207,18 +211,23 @@ export default function TimelineCanvas({
   const todayX = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom) / 2;
   const todayVisible = todayX >= 0 && todayX <= canvasWidth;
 
-  // --- row Y positions ---
+  // --- row Y positions (variable height — depends on sub-lane count) ---
   const rowYMap = useMemo(() => {
     const map = new Map<string, number>();
     let y = HEADER_HEIGHT;
     for (const row of sortedRows) {
       map.set(row.id, y);
-      y += ROW_HEIGHT;
+      y += (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT;
     }
     return map;
-  }, [sortedRows]);
+  }, [sortedRows, rowLaneCount]);
 
-  const svgHeight = HEADER_HEIGHT + sortedRows.length * ROW_HEIGHT;
+  const svgHeight = useMemo(() => {
+    return sortedRows.reduce(
+      (acc, row) => acc + (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT,
+      HEADER_HEIGHT
+    );
+  }, [sortedRows, rowLaneCount]);
 
   // ---------------------------------------------------------------------------
   // Scroll refs
@@ -240,9 +249,11 @@ export default function TimelineCanvas({
   const scrollStateRef = useRef({ viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd });
   scrollStateRef.current = { viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd };
 
-  // Stable ref to sortedRows so drag callbacks don't need it as a dep
+  // Stable refs so drag callbacks never read stale closures
   const sortedRowsRef = useRef(sortedRows);
   sortedRowsRef.current = sortedRows;
+  const rowLaneCountRef = useRef(rowLaneCount);
+  rowLaneCountRef.current = rowLaneCount;
 
   // ---------------------------------------------------------------------------
   // Drag state
@@ -256,15 +267,20 @@ export default function TimelineCanvas({
     cursorDayOffset: number; // fractional days from task.start to cursor (move only)
     duration: number;        // origEnd - origStart in whole days (move only)
     initialClientX: number;  // viewport X at drag-begin, used for dead-zone check
+    initialClientY: number;  // viewport Y at drag-begin, used for dead-zone check
     hasMoved: boolean;
     currentStart: string;    // latest snapped position, read on mouseup
     currentEnd: string;
     currentRowId: string;    // row currently under the cursor (move only)
   };
   const dragStateRef    = useRef<DragState | null>(null);
-  const justDraggedRef  = useRef(false); // blocks onClick after a real drag
-  const updateTaskRef   = useRef(updateTask);
-  updateTaskRef.current = updateTask;
+  const justDraggedRef         = useRef(false); // blocks onClick after a real drag
+  const updateTaskRef          = useRef(updateTask);
+  updateTaskRef.current        = updateTask;
+  const batchUpdateTasksRef    = useRef(batchUpdateTasks);
+  batchUpdateTasksRef.current  = batchUpdateTasks;
+  const updateRowRef           = useRef(updateRow);
+  updateRowRef.current         = updateRow;
 
   // cursor position during drag — read by the auto-scroll RAF loop
   const dragClientXRef    = useRef(0);
@@ -273,10 +289,120 @@ export default function TimelineCanvas({
 
   // Changing this state re-renders the bar at its dragged position
   const [dragOverride, setDragOverride] = useState<{
-    taskId: string; start: string; end: string; rowId: string;
+    taskId: string; start: string; end: string; rowId: string; previewLane: number;
   } | null>(null);
 
+  // Drop indicator: highlights the target lane during a move drag.
+  // targetTaskId / position are only set when the cursor lane has an overlapping task
+  // (used to resolve rowOrder so the right task wins the lane on conflict).
+  const [dropIndicator, setDropIndicator] = useState<{
+    rowId: string;
+    lane: number;
+    targetTaskId?: string;
+    position?: "above" | "below";
+  } | null>(null);
+  const dropIndicatorRef = useRef<{
+    rowId: string;
+    lane: number;
+    targetTaskId?: string;
+    position?: "above" | "below";
+  } | null>(null);
+
+  // Stable refs for drag callbacks that need current render values
+  const tasksRef       = useRef(tasks);
+  tasksRef.current     = tasks;
+  const subLaneMapRef  = useRef(subLaneMap);
+  subLaneMapRef.current = subLaneMap;
+  const rowYMapRef     = useRef(rowYMap);
+  rowYMapRef.current   = rowYMap;
+
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // Lane context menu (right-click)
+  // ---------------------------------------------------------------------------
+  const [laneMenu, setLaneMenu] = useState<{
+    x: number;        // viewport position
+    y: number;
+    rowId: string;
+    lane: number;
+    tasksInLane: Task[];  // tasks visually rendered in this lane
+  } | null>(null);
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!laneMenu) return;
+    function handleOutside() { setLaneMenu(null); }
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [laneMenu]);
+
+  // Translate clientY to { rowId, lane } based on variable row heights
+  function getLaneAtClientY(clientY: number): { rowId: string; lane: number } | null {
+    const c = containerRef.current;
+    if (!c) return null;
+    const svgY = clientY - c.getBoundingClientRect().top + c.scrollTop;
+    if (svgY < HEADER_HEIGHT) return null;
+    const rows = sortedRowsRef.current;
+    const lc = rowLaneCountRef.current;
+    let y = HEADER_HEIGHT;
+    for (const row of rows) {
+      const totalLanes = lc.get(row.id) ?? 1;
+      const rowH = totalLanes * ROW_HEIGHT;
+      if (svgY < y + rowH) {
+        const lane = Math.min(Math.floor((svgY - y) / ROW_HEIGHT), totalLanes - 1);
+        return { rowId: row.id, lane };
+      }
+      y += rowH;
+    }
+    return null;
+  }
+
+  function handleContainerContextMenu(e: React.MouseEvent) {
+    // Don't show lane menu during or right after a drag
+    if (dragStateRef.current?.hasMoved) return;
+    e.preventDefault();
+    const hit = getLaneAtClientY(e.clientY);
+    if (!hit) return;
+    const { rowId, lane } = hit;
+    const tasksInLane = tasks.filter(
+      (t) => t.rowId === rowId && (subLaneMap.get(t.id) ?? 0) === lane
+    );
+    setLaneMenu({ x: e.clientX, y: e.clientY, rowId, lane, tasksInLane });
+  }
+
+  async function handleLaneAddAbove() {
+    if (!laneMenu) return;
+    const { rowId, lane } = laneMenu;
+    setLaneMenu(null);
+    const currentLanes = rowLaneCount.get(rowId) ?? 1;
+    const affected = tasks
+      .filter((t) => t.rowId === rowId && (t.lane ?? 0) >= lane)
+      .map((t) => ({ taskId: t.id, changes: { lane: (t.lane ?? 0) + 1 } }));
+    await batchUpdateTasks(affected, { rowId, laneCount: currentLanes + 1 });
+  }
+
+  async function handleLaneAddBelow() {
+    if (!laneMenu) return;
+    const { rowId, lane } = laneMenu;
+    setLaneMenu(null);
+    const currentLanes = rowLaneCount.get(rowId) ?? 1;
+    const affected = tasks
+      .filter((t) => t.rowId === rowId && (t.lane ?? 0) >= lane + 1)
+      .map((t) => ({ taskId: t.id, changes: { lane: (t.lane ?? 0) + 1 } }));
+    await batchUpdateTasks(affected, { rowId, laneCount: currentLanes + 1 });
+  }
+
+  async function handleLaneDelete() {
+    if (!laneMenu || laneMenu.tasksInLane.length > 0) return;
+    const { rowId, lane } = laneMenu;
+    setLaneMenu(null);
+    const currentLanes = rowLaneCount.get(rowId) ?? 1;
+    const affected = tasks
+      .filter((t) => t.rowId === rowId && (t.lane ?? 0) > lane)
+      .map((t) => ({ taskId: t.id, changes: { lane: (t.lane ?? 0) - 1 } }));
+    await batchUpdateTasks(affected, { rowId, laneCount: Math.max(1, currentLanes - 1) });
+  }
 
   // ---------------------------------------------------------------------------
   // useLayoutEffect — runs after any view-bounds change.
@@ -438,14 +564,21 @@ export default function TimelineCanvas({
 
   // Returns the rowId of whichever row the clientY is over, clamped to valid rows.
   // Returns null when the cursor is above the date-axis header.
+  // Handles variable row heights (multi-lane rows are taller).
   function getRowAtClientY(clientY: number): string | null {
     const c = containerRef.current;
     if (!c) return null;
     const svgY = clientY - c.getBoundingClientRect().top + c.scrollTop;
     if (svgY < HEADER_HEIGHT) return null;
     const rows = sortedRowsRef.current;
-    const idx  = Math.max(0, Math.min(Math.floor((svgY - HEADER_HEIGHT) / ROW_HEIGHT), rows.length - 1));
-    return rows[idx]?.id ?? null;
+    const laneCount = rowLaneCountRef.current;
+    let y = HEADER_HEIGHT;
+    for (const row of rows) {
+      const h = (laneCount.get(row.id) ?? 1) * ROW_HEIGHT;
+      if (svgY < y + h) return row.id;
+      y += h;
+    }
+    return rows[rows.length - 1]?.id ?? null;
   }
 
   // Core position computation — called from mousemove and the auto-scroll loop.
@@ -479,7 +612,59 @@ export default function TimelineCanvas({
     const newEnd   = format(addDays(viewStart, newEndDays),   "yyyy-MM-dd");
     ds.currentStart = newStart;
     ds.currentEnd   = newEnd;
-    setDragOverride({ taskId: ds.taskId, start: newStart, end: newEnd, rowId: ds.currentRowId });
+
+    // Drop indicator: always shown when cursor is in a valid row during a move drag.
+    // Cursor Y → lane index. If that lane has an overlapping task, also track
+    // above/below for rowOrder resolution.
+    if (ds.type === "move") {
+      const c = containerRef.current;
+      const rowBaseY = rowYMapRef.current.get(ds.currentRowId) ?? HEADER_HEIGHT;
+      const svgY = c ? clientY - c.getBoundingClientRect().top + c.scrollTop : 0;
+      const relY = Math.max(0, svgY - rowBaseY);
+      const totalLanes = rowLaneCountRef.current.get(ds.currentRowId) ?? 1;
+      const cursorLane = Math.min(Math.floor(relY / ROW_HEIGHT), totalLanes - 1);
+
+      const allTasks = tasksRef.current;
+      const slm = subLaneMapRef.current;
+      // Tasks in the cursor's lane that overlap the dragged task's date range
+      const overlappingInLane = allTasks.filter(
+        (t) => t.id !== ds.taskId &&
+               t.rowId === ds.currentRowId &&
+               (slm.get(t.id) ?? 0) === cursorLane &&
+               newStart <= t.end && newEnd >= t.start
+      );
+
+      // Snap line: show near lane boundaries regardless of overlap
+      const SNAP_ZONE = 5;
+      const withinLaneY = relY - cursorLane * ROW_HEIGHT;
+      const snapPosition: "above" | "below" | undefined =
+        withinLaneY < SNAP_ZONE ? "above" :
+        withinLaneY > ROW_HEIGHT - SNAP_ZONE ? "below" :
+        undefined;
+
+      let indicator: typeof dropIndicatorRef.current;
+      if (overlappingInLane.length > 0) {
+        // Pick closest overlapping task for rowOrder resolution on drop
+        let target = overlappingInLane[0];
+        let minDist = Infinity;
+        for (const t of overlappingInLane) {
+          const dist = Math.abs(relY - (cursorLane * ROW_HEIGHT + ROW_HEIGHT / 2));
+          if (dist < minDist) { minDist = dist; target = t; }
+        }
+        // snapPosition is undefined in the middle dead zone → swap on drop
+        indicator = { rowId: ds.currentRowId, lane: cursorLane, targetTaskId: target.id, position: snapPosition };
+      } else {
+        // No overlap — snap line shows only near lane boundaries
+        indicator = { rowId: ds.currentRowId, lane: cursorLane, position: snapPosition };
+      }
+      dropIndicatorRef.current = indicator;
+      setDropIndicator(indicator);
+      setDragOverride({ taskId: ds.taskId, start: newStart, end: newEnd, rowId: ds.currentRowId, previewLane: cursorLane });
+    } else {
+      // For resize drags, keep the task in its current lane
+      const currentLane = subLaneMapRef.current.get(ds.taskId) ?? 0;
+      setDragOverride({ taskId: ds.taskId, start: newStart, end: newEnd, rowId: ds.currentRowId, previewLane: currentLane });
+    }
   }
 
   // Auto-scroll: RAF loop — scrolls when cursor is near the horizontal edge.
@@ -526,7 +711,7 @@ export default function TimelineCanvas({
     dragClientXRef.current = e.clientX;
     dragClientYRef.current = e.clientY;
 
-    if (!ds.hasMoved && Math.abs(e.clientX - ds.initialClientX) < 6) return;
+    if (!ds.hasMoved && Math.hypot(e.clientX - ds.initialClientX, e.clientY - ds.initialClientY) < 6) return;
     ds.hasMoved = true;
 
     applyDragPosition(getSvgX(e.clientX), e.clientY);
@@ -540,18 +725,85 @@ export default function TimelineCanvas({
     const ds = dragStateRef.current;
     if (ds?.hasMoved) {
       justDraggedRef.current = true;
-      const updates: Parameters<typeof updateTaskRef.current>[1] = {
+
+      // Base updates applied in every committed move/resize
+      const baseUpdates: Parameters<typeof updateTaskRef.current>[1] = {
         start: ds.currentStart,
         end:   ds.currentEnd,
       };
-      // Commit row change only for move drags where the row actually changed
       if (ds.type === "move" && ds.currentRowId !== ds.origRowId) {
-        updates.rowId = ds.currentRowId;
+        baseUpdates.rowId = ds.currentRowId;
       }
-      updateTaskRef.current(ds.taskId, updates);
+
+      const indicator = dropIndicatorRef.current;
+
+      if (ds.type === "move" && indicator?.position) {
+        // ── SNAP DROP: white line was showing → insert a new lane at the boundary
+        // "above" snap line = boundary is at the TOP of indicator.lane
+        //   → new lane inserted at indicator.lane  (shifts existing lanes ≥ that index down)
+        // "below" snap line = boundary is at the BOTTOM of indicator.lane
+        //   → new lane inserted at indicator.lane + 1
+        const insertLane = indicator.position === "above"
+          ? indicator.lane
+          : indicator.lane + 1;
+        const targetRowId = ds.currentRowId;
+
+        // Build batch: shift every other task in the row whose lane ≥ insertLane
+        const batch: Array<{ taskId: string; changes: Parameters<typeof updateTaskRef.current>[1] }> = [];
+        for (const t of tasksRef.current) {
+          if (t.id === ds.taskId || t.rowId !== targetRowId) continue;
+          if ((t.lane ?? 0) >= insertLane) {
+            batch.push({ taskId: t.id, changes: { lane: (t.lane ?? 0) + 1 } });
+          }
+        }
+        // Include the dragged task (new lane + date/row updates)
+        batch.push({ taskId: ds.taskId, changes: { ...baseUpdates, lane: insertLane } });
+
+        // Commit all lane shifts + row laneCount atomically
+        const currentEffectiveLanes = rowLaneCountRef.current.get(targetRowId) ?? 1;
+        batchUpdateTasksRef.current(batch, { rowId: targetRowId, laneCount: currentEffectiveLanes + 1 });
+
+      } else if (ds.type === "move" && indicator?.targetTaskId && !indicator.position) {
+        // ── SWAP DROP: cursor in the dead zone (middle of lane) over another task
+        // Each task takes the other's current visual lane.
+        const slm = subLaneMapRef.current;
+        const draggedOriginalLane = slm.get(ds.taskId) ?? 0;
+        const targetCurrentLane   = slm.get(indicator.targetTaskId) ?? 0;
+        // Swap start positions; each task keeps its own duration.
+        // batchUpdateTasks handles milestone coercion (end = start) automatically.
+        const targetTask = tasksRef.current.find((t) => t.id === indicator.targetTaskId);
+        if (targetTask) {
+          const draggedDuration = differenceInDays(parseISO(ds.origEnd),      parseISO(ds.origStart));
+          const targetDuration  = differenceInDays(parseISO(targetTask.end),  parseISO(targetTask.start));
+          batchUpdateTasksRef.current([
+            { taskId: ds.taskId, changes: {
+                start: targetTask.start,
+                end:   format(addDays(parseISO(targetTask.start), draggedDuration), "yyyy-MM-dd"),
+                rowId: ds.currentRowId, lane: targetCurrentLane,
+            }},
+            { taskId: indicator.targetTaskId, changes: {
+                start: ds.origStart,
+                end:   format(addDays(parseISO(ds.origStart), targetDuration), "yyyy-MM-dd"),
+                rowId: ds.origRowId, lane: draggedOriginalLane,
+            }},
+          ]);
+        }
+
+      } else if (ds.type === "move" && indicator) {
+        // ── NORMAL DROP: cursor in an empty lane or middle of lane with no task
+        baseUpdates.lane = indicator.lane;
+        updateTaskRef.current(ds.taskId, baseUpdates);
+
+      } else {
+        // ── RESIZE or move with no indicator (shouldn't normally happen) ──
+        updateTaskRef.current(ds.taskId, baseUpdates);
+      }
     }
+
     dragStateRef.current = null;
     setDragOverride(null);
+    setDropIndicator(null);
+    dropIndicatorRef.current = null;
     stopAutoScrollLoop();
     const c = containerRef.current;
     if (c) { c.style.cursor = ""; c.style.userSelect = ""; }
@@ -598,6 +850,7 @@ export default function TimelineCanvas({
       cursorDayOffset,
       duration,
       initialClientX: e.clientX,
+      initialClientY: e.clientY,
       hasMoved: false,
       currentStart: task.start,
       currentEnd:   task.end,
@@ -615,6 +868,7 @@ export default function TimelineCanvas({
     <div
       ref={containerRef}
       onScroll={handleScroll}
+      onContextMenu={handleContainerContextMenu}
       className="relative flex-1 overflow-auto bg-[var(--color-bg-base)]"
       style={{ minWidth: 0 }}
     >
@@ -627,6 +881,9 @@ export default function TimelineCanvas({
             const effRowId = isBeingDragged ? dragOverride!.rowId : task.rowId;
             const rowY = rowYMap.get(effRowId);
             if (rowY === undefined) return null;
+            const subLane = isBeingDragged
+              ? dragOverride!.previewLane
+              : (subLaneMap.get(task.id) ?? 0);
             const effStart = isBeingDragged ? dragOverride!.start : task.start;
             const effEnd   = isBeingDragged ? dragOverride!.end   : task.end;
             const taskStart = parseISO(effStart);
@@ -635,11 +892,12 @@ export default function TimelineCanvas({
             const x    = dateToX(parseISO(effStart),               viewStart, viewEnd, canvasWidth);
             const xEnd = dateToX(addDays(parseISO(effEnd), 1), viewStart, viewEnd, canvasWidth);
             const w = xEnd - x;
+            const barY = rowY + subLane * ROW_HEIGHT + BAR_PAD_Y;
             return (
               <clipPath key={task.id} id={`clip-${task.id}`}>
                 <rect
                   x={x + 6}
-                  y={rowY + BAR_PAD_Y}
+                  y={barY}
                   width={Math.max(w - 12, 0)}
                   height={BAR_HEIGHT}
                 />
@@ -683,11 +941,12 @@ export default function TimelineCanvas({
         {/* ── Row bands ────────────────────────────────────────────────── */}
         {sortedRows.map((row) => {
           const y = rowYMap.get(row.id)!;
+          const rowHeight = (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT;
           return (
             <g key={row.id}>
               <line
-                x1={0} y1={y + ROW_HEIGHT}
-                x2={canvasWidth} y2={y + ROW_HEIGHT}
+                x1={0} y1={y + rowHeight}
+                x2={canvasWidth} y2={y + rowHeight}
                 stroke="rgba(255,255,255,0.08)"
                 strokeWidth={1}
               />
@@ -757,6 +1016,11 @@ export default function TimelineCanvas({
           const rowY = rowYMap.get(effRowId);
           if (rowY === undefined) return null;
 
+          // Sub-lane: use previewLane when dragging so the bar tracks the cursor lane
+          const subLane = isBeingDragged
+            ? dragOverride!.previewLane
+            : (subLaneMap.get(task.id) ?? 0);
+
           const effStart = isBeingDragged ? dragOverride!.start : task.start;
           const effEnd   = isBeingDragged ? dragOverride!.end   : task.end;
 
@@ -768,7 +1032,7 @@ export default function TimelineCanvas({
           const x    = dateToX(parseISO(effStart),               viewStart, viewEnd, canvasWidth);
           const xEnd = dateToX(addDays(parseISO(effEnd), 1), viewStart, viewEnd, canvasWidth);
           const w = Math.max(xEnd - x, 2);
-          const barY = rowY + BAR_PAD_Y;
+          const barY = rowY + subLane * ROW_HEIGHT + BAR_PAD_Y;
           const barCenterY = barY + BAR_HEIGHT / 2;
           const status = computeEffectiveStatus(task);
           const isDone = status === "done";
@@ -792,6 +1056,8 @@ export default function TimelineCanvas({
 
             const hasLabelSpace = !tasks.some((other) => {
               if (other.id === task.id || other.rowId !== task.rowId) return false;
+              // Only check tasks in the same sub-lane — different lanes are at different Y positions
+              if ((subLaneMap.get(other.id) ?? 0) !== subLane) return false;
               const oLeft  = dateToX(parseISO(other.start), viewStart, viewEnd, canvasWidth);
               const oRight = dateToX(addDays(parseISO(other.end), 1), viewStart, viewEnd, canvasWidth);
               return oLeft < labelEndX && oRight > labelX;
@@ -910,6 +1176,40 @@ export default function TimelineCanvas({
             </g>
           );
         })}
+
+        {/* ── Drop indicator — lane highlight (above task bars, below header) */}
+        {dropIndicator && (() => {
+          const rY = rowYMap.get(dropIndicator.rowId);
+          if (rY === undefined) return null;
+          const laneY = rY + dropIndicator.lane * ROW_HEIGHT;
+          const snapLineY = dropIndicator.position === "above"
+            ? laneY
+            : laneY + ROW_HEIGHT;
+          return (
+            <>
+              {/* Accent lane rect — always visible during move drag */}
+              <rect
+                x={0} y={laneY}
+                width={canvasWidth} height={ROW_HEIGHT}
+                fill="var(--color-accent)"
+                fillOpacity={0.18}
+                stroke="var(--color-accent)"
+                strokeWidth={1.5}
+                style={{ pointerEvents: "none" }}
+              />
+              {/* Bright snap line — appears near lane boundaries */}
+              {dropIndicator.position && (
+                <line
+                  x1={0} y1={snapLineY}
+                  x2={canvasWidth} y2={snapLineY}
+                  stroke="rgba(255,255,255,0.9)"
+                  strokeWidth={2.5}
+                  style={{ pointerEvents: "none" }}
+                />
+              )}
+            </>
+          );
+        })()}
 
         {/* ── Date axis (rendered last — sits on top of grid lines) ─────── */}
         <rect
@@ -1121,6 +1421,82 @@ export default function TimelineCanvas({
         />
 
       </svg>
+
+      {/* ── Lane context menu ─────────────────────────────────────────────── */}
+      {laneMenu && (() => {
+        const isEmpty = laneMenu.tasksInLane.length === 0;
+        // Position the menu, keeping it inside the viewport
+        const menuW = 210;
+        const left = Math.min(laneMenu.x, window.innerWidth - menuW - 8);
+        const top  = laneMenu.y + 4;
+        return (
+          <div
+            onMouseDown={(e) => e.stopPropagation()} // don't close on click inside
+            style={{ position: "fixed", left, top, zIndex: 999, width: menuW }}
+            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-1 shadow-xl"
+          >
+            {/* Header */}
+            <div className="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+              Lane {laneMenu.lane + 1}
+            </div>
+            <div className="mx-2 mb-1 border-t border-[var(--color-border)]" />
+
+            {/* Add above */}
+            <button
+              onClick={handleLaneAddAbove}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M6 2v8M2 6h8" />
+              </svg>
+              Add lane above
+            </button>
+
+            {/* Add below */}
+            <button
+              onClick={handleLaneAddBelow}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M6 2v8M2 6h8" />
+              </svg>
+              Add lane below
+            </button>
+
+            <div className="mx-2 my-1 border-t border-[var(--color-border)]" />
+
+            {/* Delete */}
+            {isEmpty ? (
+              <button
+                onClick={handleLaneDelete}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-400 hover:bg-red-500/10"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M2 4h8M4.5 4V3h3v1M5 6v3M7 6v3M3 4l.5 5.5h5L9 4" />
+                </svg>
+                Delete lane
+              </button>
+            ) : (
+              <div className="px-3 py-1.5">
+                <div className="flex items-center gap-1.5 text-sm text-[var(--color-text-secondary)]">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <circle cx="6" cy="6" r="5" />
+                    <path d="M6 4v3M6 8.5v.5" />
+                  </svg>
+                  Lane not empty
+                </div>
+                <div className="mt-1 space-y-0.5">
+                  {laneMenu.tasksInLane.map((t) => (
+                    <div key={t.id} className="truncate pl-4 text-xs text-[var(--color-text-secondary)]">
+                      • {t.title}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

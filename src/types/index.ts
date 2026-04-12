@@ -15,6 +15,7 @@ export interface Row {
   name: string;
   order: number;
   color: string;    // hex, e.g. "#a78bfa"
+  laneCount: number; // user-controlled minimum number of sub-lanes (never auto-decremented)
 }
 
 export interface Task {
@@ -28,6 +29,8 @@ export interface Task {
   isMilestone: boolean;
   notes: string;
   dependencies: string[];  // array of task IDs
+  rowOrder: number;        // sort key for sub-lane stacking within a row (lower = higher/earlier lane)
+  lane: number;            // preferred sub-lane index within the row (user's last drop position)
   createdAt: string;       // ISO 8601
   updatedAt: string;       // ISO 8601
 }
