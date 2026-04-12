@@ -131,7 +131,7 @@ export default function TimelineCanvas({
   onRegisterScrollToToday,
   onRegisterScrollToDate,
 }: TimelineCanvasProps) {
-  const { setPanel } = useLoadedWorkspace();
+  const { setPanel, updateTask } = useLoadedWorkspace();
   const today = startOfDay(new Date());
 
   // Capture scrollCenterDate at mount only — never changes after that
@@ -239,6 +239,37 @@ export default function TimelineCanvas({
   // Keep a ref with current values so the rAF callback never reads stale closures
   const scrollStateRef = useRef({ viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd });
   scrollStateRef.current = { viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd };
+
+  // ---------------------------------------------------------------------------
+  // Drag state
+  // ---------------------------------------------------------------------------
+  type DragState = {
+    type: "move" | "resizeLeft" | "resizeRight";
+    taskId: string;
+    origStart: string;      // YYYY-MM-DD at drag start
+    origEnd: string;
+    // "move" only: fractional-day offset of cursor from task.start at drag-begin.
+    // Stored in day units (not pixels) so it stays valid when viewStart shifts.
+    cursorDayOffset: number;
+    duration: number;       // origEnd - origStart in whole days (move only)
+    initialClientX: number; // viewport X at drag-begin, used for dead-zone check
+    hasMoved: boolean;
+    currentStart: string;   // latest snapped position, read on mouseup
+    currentEnd: string;
+  };
+  const dragStateRef    = useRef<DragState | null>(null);
+  const justDraggedRef  = useRef(false); // blocks onClick after a real drag
+  const updateTaskRef   = useRef(updateTask);
+  updateTaskRef.current = updateTask;
+
+  // clientX of the cursor during drag — read by the auto-scroll RAF loop
+  const dragClientXRef    = useRef(0);
+  const autoScrollRafRef  = useRef<number | null>(null);
+
+  // Changing this state re-renders the bar at its dragged position
+  const [dragOverride, setDragOverride] = useState<{
+    taskId: string; start: string; end: string;
+  } | null>(null);
 
   // ---------------------------------------------------------------------------
   // useLayoutEffect — runs after any view-bounds change.
@@ -387,6 +418,170 @@ export default function TimelineCanvas({
   }
 
   // ---------------------------------------------------------------------------
+  // Drag helpers
+  // ---------------------------------------------------------------------------
+  const HANDLE_W = 6; // px — invisible resize strip on each edge
+
+  // Convert a viewport clientX to SVG canvas X (accounts for scroll offset)
+  function getSvgX(clientX: number): number {
+    const c = containerRef.current;
+    if (!c) return 0;
+    return clientX - c.getBoundingClientRect().left + c.scrollLeft;
+  }
+
+  // Core position computation — called from both mousemove and the auto-scroll loop.
+  // Uses cursorDayOffset (day units, view-independent) so canvas extensions mid-drag
+  // don't cause the task to jump.
+  function applyDragPosition(svgX: number) {
+    const ds = dragStateRef.current;
+    if (!ds) return;
+    const { viewStart, zoom } = scrollStateRef.current;
+    const px = pxPerDay(zoom);
+    const origStartDays = differenceInDays(parseISO(ds.origStart), viewStart);
+    const origEndDays   = differenceInDays(parseISO(ds.origEnd),   viewStart);
+
+    let newStartDays: number;
+    let newEndDays: number;
+
+    if (ds.type === "move") {
+      // cursorDayOffset is in fractional days from task start — stays valid across viewStart changes
+      newStartDays = Math.round(svgX / px - ds.cursorDayOffset);
+      newEndDays   = newStartDays + ds.duration;
+    } else if (ds.type === "resizeLeft") {
+      newStartDays = Math.min(Math.round(svgX / px), origEndDays);
+      newEndDays   = origEndDays;
+    } else {
+      // Right edge sits at (endDays+1)*px
+      newEndDays   = Math.max(Math.round(svgX / px) - 1, origStartDays);
+      newStartDays = origStartDays;
+    }
+
+    const newStart = format(addDays(viewStart, newStartDays), "yyyy-MM-dd");
+    const newEnd   = format(addDays(viewStart, newEndDays),   "yyyy-MM-dd");
+    ds.currentStart = newStart;
+    ds.currentEnd   = newEnd;
+    setDragOverride({ taskId: ds.taskId, start: newStart, end: newEnd });
+  }
+
+  // Auto-scroll: RAF loop that scrolls the container when the cursor is near an
+  // edge during drag, which naturally triggers the existing extend-on-demand logic.
+  const startAutoScrollLoop = useCallback(() => {
+    if (autoScrollRafRef.current !== null) return;
+    const AUTO_ZONE  = 60;  // px from edge to activate
+    const AUTO_SPEED = 10;  // max px per frame
+
+    function tick() {
+      const c = containerRef.current;
+      if (!c || !dragStateRef.current) { autoScrollRafRef.current = null; return; }
+
+      const rect = c.getBoundingClientRect();
+      const cx   = dragClientXRef.current;
+      const fromLeft  = cx - rect.left;
+      const fromRight = rect.right - cx;
+
+      let delta = 0;
+      if (fromLeft  > 0 && fromLeft  < AUTO_ZONE) delta = -AUTO_SPEED * (1 - fromLeft  / AUTO_ZONE);
+      if (fromRight > 0 && fromRight < AUTO_ZONE) delta =  AUTO_SPEED * (1 - fromRight / AUTO_ZONE);
+
+      if (delta !== 0) {
+        c.scrollLeft += delta;
+        applyDragPosition(getSvgX(dragClientXRef.current));
+      }
+
+      autoScrollRafRef.current = requestAnimationFrame(tick);
+    }
+    autoScrollRafRef.current = requestAnimationFrame(tick);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stopAutoScrollLoop = useCallback(() => {
+    if (autoScrollRafRef.current !== null) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+  }, []);
+
+  // Document-level mousemove — stable, accesses everything through refs
+  const handleDocMouseMove = useCallback((e: MouseEvent) => {
+    const ds = dragStateRef.current;
+    if (!ds) return;
+
+    dragClientXRef.current = e.clientX;
+
+    // Dead zone: ignore tiny jitter before committing to a drag
+    if (!ds.hasMoved && Math.abs(e.clientX - ds.initialClientX) < 3) return;
+    ds.hasMoved = true;
+
+    applyDragPosition(getSvgX(e.clientX));
+
+    const c = containerRef.current;
+    if (c) c.style.cursor = ds.type === "move" ? "grabbing" : "ew-resize";
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Document-level mouseup — commits or discards
+  const handleDocMouseUp = useCallback(() => {
+    const ds = dragStateRef.current;
+    if (ds?.hasMoved) {
+      justDraggedRef.current = true;
+      updateTaskRef.current(ds.taskId, { start: ds.currentStart, end: ds.currentEnd });
+    }
+    dragStateRef.current = null;
+    setDragOverride(null);
+    stopAutoScrollLoop();
+    const c = containerRef.current;
+    if (c) { c.style.cursor = ""; c.style.userSelect = ""; }
+    document.removeEventListener("mousemove", handleDocMouseMove);
+    document.removeEventListener("mouseup", handleDocMouseUp);
+  }, [stopAutoScrollLoop]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup in case component unmounts mid-drag
+  useEffect(() => {
+    return () => {
+      stopAutoScrollLoop();
+      document.removeEventListener("mousemove", handleDocMouseMove);
+      document.removeEventListener("mouseup", handleDocMouseUp);
+    };
+  }, [handleDocMouseMove, handleDocMouseUp, stopAutoScrollLoop]);
+
+  function handleBarMouseDown(
+    e: React.MouseEvent,
+    task: Task,
+    dragType: "move" | "resizeLeft" | "resizeRight"
+  ) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const c = containerRef.current;
+    if (!c) return;
+    c.style.userSelect = "none";
+
+    const { viewStart, zoom } = scrollStateRef.current;
+    const px      = pxPerDay(zoom);
+    const svgX    = getSvgX(e.clientX);
+    // cursorDayOffset: how many fractional days the cursor is from task.start.
+    // Stored in day units so it survives viewStart shifts during extend-on-demand.
+    const taskStartDays   = differenceInDays(parseISO(task.start), viewStart);
+    const cursorDayOffset = svgX / px - taskStartDays;
+    const duration        = differenceInDays(parseISO(task.end), parseISO(task.start));
+
+    dragClientXRef.current = e.clientX;
+    dragStateRef.current = {
+      type: dragType,
+      taskId: task.id,
+      origStart: task.start,
+      origEnd:   task.end,
+      cursorDayOffset,
+      duration,
+      initialClientX: e.clientX,
+      hasMoved: false,
+      currentStart: task.start,
+      currentEnd:   task.end,
+    };
+    document.addEventListener("mousemove", handleDocMouseMove);
+    document.addEventListener("mouseup",   handleDocMouseUp);
+    startAutoScrollLoop();
+  }
+
+  // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
   return (
@@ -403,12 +598,14 @@ export default function TimelineCanvas({
           {tasks.map((task) => {
             const rowY = rowYMap.get(task.rowId);
             if (rowY === undefined) return null;
-            // Only create clip paths for tasks in the render window
-            const taskStart = parseISO(task.start);
-            const taskEnd   = addDays(parseISO(task.end), 1);
-            if (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart)) return null;
-            const x = dateToX(parseISO(task.start), viewStart, viewEnd, canvasWidth);
-            const xEnd = dateToX(addDays(parseISO(task.end), 1), viewStart, viewEnd, canvasWidth);
+            const isBeingDragged = dragOverride?.taskId === task.id;
+            const effStart = isBeingDragged ? dragOverride!.start : task.start;
+            const effEnd   = isBeingDragged ? dragOverride!.end   : task.end;
+            const taskStart = parseISO(effStart);
+            const taskEnd   = addDays(parseISO(effEnd), 1);
+            if (!isBeingDragged && (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart))) return null;
+            const x    = dateToX(parseISO(effStart),               viewStart, viewEnd, canvasWidth);
+            const xEnd = dateToX(addDays(parseISO(effEnd), 1), viewStart, viewEnd, canvasWidth);
             const w = xEnd - x;
             return (
               <clipPath key={task.id} id={`clip-${task.id}`}>
@@ -529,31 +726,40 @@ export default function TimelineCanvas({
           const rowY = rowYMap.get(task.rowId);
           if (rowY === undefined) return null;
 
-          // Overlap check — render if any part of the task is in the render window
-          const taskStart = parseISO(task.start);
-          const taskEnd   = addDays(parseISO(task.end), 1);
-          if (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart)) return null;
+          // Use drag-override dates when this task is being dragged
+          const isBeingDragged = dragOverride?.taskId === task.id;
+          const effStart = isBeingDragged ? dragOverride!.start : task.start;
+          const effEnd   = isBeingDragged ? dragOverride!.end   : task.end;
 
-          const x = dateToX(parseISO(task.start), viewStart, viewEnd, canvasWidth);
-          const xEnd = dateToX(addDays(parseISO(task.end), 1), viewStart, viewEnd, canvasWidth);
-          const w = Math.max(xEnd - x, 2); // always at least 2px wide
+          const taskStart = parseISO(effStart);
+          const taskEnd   = addDays(parseISO(effEnd), 1);
+          // Always render the dragged task even if it leaves the render window
+          if (!isBeingDragged && (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart))) return null;
+
+          const x    = dateToX(parseISO(effStart),               viewStart, viewEnd, canvasWidth);
+          const xEnd = dateToX(addDays(parseISO(effEnd), 1), viewStart, viewEnd, canvasWidth);
+          const w = Math.max(xEnd - x, 2);
           const barY = rowY + BAR_PAD_Y;
           const barCenterY = barY + BAR_HEIGHT / 2;
           const status = computeEffectiveStatus(task);
           const isDone = status === "done";
           const isOverdue = status === "overdue";
 
+          // Shared click handler — skip if this mouseup followed a real drag
+          function handleClick() {
+            if (justDraggedRef.current) { justDraggedRef.current = false; return; }
+            setPanel({ type: "task", taskId: task.id });
+          }
+
           if (task.isMilestone) {
             const cx = x + w / 2;
             const r = MILESTONE_R;
 
-            // Label: truncate at 15 chars, show to the right if space is clear
             const rawLabel = isDone ? `✓ ${task.title}` : task.title;
             const displayLabel = rawLabel.length > 20 ? rawLabel.slice(0, 20) + "…" : rawLabel;
             const labelX = cx + r + 6;
-            const labelEndX = labelX + displayLabel.length * 8; // ~8px/char estimate
+            const labelEndX = labelX + displayLabel.length * 8;
 
-            // Show label only if no other task in this row occupies [labelX, labelEndX]
             const hasLabelSpace = !tasks.some((other) => {
               if (other.id === task.id || other.rowId !== task.rowId) return false;
               const oLeft  = dateToX(parseISO(other.start), viewStart, viewEnd, canvasWidth);
@@ -562,7 +768,12 @@ export default function TimelineCanvas({
             });
 
             return (
-              <g key={task.id} style={{ cursor: "pointer" }} onClick={() => setPanel({ type: "task", taskId: task.id })}>
+              <g
+                key={task.id}
+                style={{ cursor: "grab" }}
+                onClick={handleClick}
+                onMouseDown={(e) => handleBarMouseDown(e, task, "move")}
+              >
                 <polygon
                   points={`${cx},${barCenterY - r} ${cx + r},${barCenterY} ${cx},${barCenterY + r} ${cx - r},${barCenterY}`}
                   fill={task.color}
@@ -587,7 +798,12 @@ export default function TimelineCanvas({
           }
 
           return (
-            <g key={task.id} style={{ cursor: "pointer" }} onClick={() => setPanel({ type: "task", taskId: task.id })}>
+            <g
+              key={task.id}
+              style={{ cursor: "grab" }}
+              onClick={handleClick}
+              onMouseDown={(e) => handleBarMouseDown(e, task, "move")}
+            >
               <rect
                 x={x}
                 y={barY}
@@ -611,6 +827,23 @@ export default function TimelineCanvas({
                 >
                   {isDone ? `✓ ${task.title}` : task.title}
                 </text>
+              )}
+              {/* Invisible edge strips for resize — only when bar is wide enough */}
+              {w >= 16 && (
+                <>
+                  <rect
+                    x={x} y={barY} width={HANDLE_W} height={BAR_HEIGHT}
+                    fill="transparent"
+                    style={{ cursor: "ew-resize" }}
+                    onMouseDown={(e) => { e.stopPropagation(); handleBarMouseDown(e, task, "resizeLeft"); }}
+                  />
+                  <rect
+                    x={x + w - HANDLE_W} y={barY} width={HANDLE_W} height={BAR_HEIGHT}
+                    fill="transparent"
+                    style={{ cursor: "ew-resize" }}
+                    onMouseDown={(e) => { e.stopPropagation(); handleBarMouseDown(e, task, "resizeRight"); }}
+                  />
+                </>
               )}
             </g>
           );
