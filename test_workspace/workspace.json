@@ -3,18 +3,28 @@
   "name": "test",
   "rows": [
     {
-      "id": "row_4190411e-748a-4d55-a3b3-623546be8188",
-      "name": "Row 1",
+      "laneCount": 5,
+      "id": "row_f7cc2184-2032-43ac-a34e-6a2ffa748f66",
+      "name": "hi hi hi hi",
       "order": 0,
       "color": "#6366f1"
     },
     {
-      "id": "row_2c2430c4-f06e-469a-9918-008306fa0b13",
-      "name": "Row 2",
+      "laneCount": 6,
+      "id": "row_4190411e-748a-4d55-a3b3-623546be8188",
+      "name": "Row 1",
       "order": 1,
       "color": "#6366f1"
+    },
+    {
+      "id": "row_2934d7d8-57e2-4abe-ad62-0bca488ae432",
+      "name": "Row 4",
+      "order": 2,
+      "color": "#6366f1",
+      "laneCount": 1
     }
   ],
   "zoom": "days",
-  "lastOpened": "2026-04-11T00:36:10.481Z"
+  "lastOpened": "2026-04-12T05:45:55.500Z",
+  "scrollCenterDate": "2026-04-16"
 }

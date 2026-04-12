@@ -82,6 +82,7 @@ export interface NewTaskInput {
   isMilestone?: boolean;
   color?: string;
   notes?: string;
+  lane?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +323,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       notes: input.notes ?? "",
       dependencies: [],
       rowOrder,
-      lane: 0,
+      lane: input.lane ?? 0,
       createdAt: now,
       updatedAt: now,
     };

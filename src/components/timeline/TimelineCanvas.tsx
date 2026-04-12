@@ -137,7 +137,7 @@ export default function TimelineCanvas({
   onRegisterScrollToDate,
   onVerticalScroll,
 }: TimelineCanvasProps) {
-  const { setPanel, updateTask, updateRow, batchUpdateTasks } = useLoadedWorkspace();
+  const { setPanel, updateTask, updateRow, batchUpdateTasks, createTask } = useLoadedWorkspace();
   const today = startOfDay(new Date());
 
   // Capture scrollCenterDate at mount only — never changes after that
@@ -871,6 +871,27 @@ export default function TimelineCanvas({
   }
 
   // ---------------------------------------------------------------------------
+  // Canvas click — create task on empty space
+  // ---------------------------------------------------------------------------
+  async function handleCanvasClick(e: React.MouseEvent) {
+    if (justDraggedRef.current) { justDraggedRef.current = false; return; }
+    const c = containerRef.current;
+    if (!c) return;
+    const svgY = e.clientY - c.getBoundingClientRect().top + c.scrollTop;
+    if (svgY < HEADER_HEIGHT) return; // click in date axis header
+    const hit = getLaneAtClientY(e.clientY);
+    if (!hit) return;
+    const { rowId, lane } = hit;
+    const svgX = getSvgX(e.clientX);
+    const { viewStart, viewEnd, canvasWidth } = scrollStateRef.current;
+    const clickedDate = xToDate(svgX, viewStart, viewEnd, canvasWidth);
+    const start = format(startOfDay(clickedDate), "yyyy-MM-dd");
+    const end = format(addDays(parseISO(start), 6), "yyyy-MM-dd");
+    const task = await createTask({ title: "", rowId, start, end, lane });
+    setPanel({ type: "task", taskId: task.id });
+  }
+
+  // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
   return (
@@ -878,6 +899,7 @@ export default function TimelineCanvas({
       ref={containerRef}
       onScroll={handleScroll}
       onContextMenu={handleContainerContextMenu}
+      onClick={handleCanvasClick}
       className="relative flex-1 overflow-auto bg-[var(--color-bg-base)]"
       style={{ minWidth: 0 }}
     >
@@ -1048,7 +1070,8 @@ export default function TimelineCanvas({
           const isOverdue = status === "overdue";
 
           // Shared click handler — skip if this mouseup followed a real drag
-          function handleClick() {
+          function handleClick(e: React.MouseEvent) {
+            e.stopPropagation();
             if (justDraggedRef.current) { justDraggedRef.current = false; return; }
             setPanel({ type: "task", taskId: task.id });
           }

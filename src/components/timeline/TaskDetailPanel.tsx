@@ -19,10 +19,18 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
   // Local draft state for the title (blur-saved); notes save on every keystroke
   const [draftTitle, setDraftTitle] = useState(task?.title ?? "");
 
+  // Keep a ref so the keydown closure always reads the latest draft title
+  const draftTitleRef = useRef(draftTitle);
+  draftTitleRef.current = draftTitle;
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         skipSaveRef.current = true;
+        // If the task has no title yet (created via canvas click), delete it on Escape
+        if (!draftTitleRef.current.trim()) {
+          deleteTask(taskId);
+        }
         setPanel({ type: "none" });
       }
     }
@@ -79,6 +87,7 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
             value={draftTitle}
             onChange={(e) => setDraftTitle(e.target.value)}
             onBlur={handleTitleBlur}
+            autoFocus={task.title === ""}
             className="rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
           />
         </div>
