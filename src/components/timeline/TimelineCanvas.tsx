@@ -113,9 +113,11 @@ export interface TimelineCanvasProps {
   sortedRows: Row[];
   tasks: Task[];
   zoom: ZoomLevel;
-  scrollCenterDate?: string;                         // from workspace, used only on mount
-  onScrollCenterDateChange?: (date: string) => void; // debounced, saves to disk
+  scrollCenterDate?: string;                            // from workspace, used only on mount
+  onScrollCenterDateChange?: (date: string) => void;   // debounced, saves to disk
+  onCenterDateLive?: (dateStr: string) => void;        // fires on every scroll, updates display
   onRegisterScrollToToday?: (fn: () => void) => void;
+  onRegisterScrollToDate?: (fn: (date: Date) => void) => void;
 }
 
 export default function TimelineCanvas({
@@ -124,7 +126,9 @@ export default function TimelineCanvas({
   zoom,
   scrollCenterDate,
   onScrollCenterDateChange,
+  onCenterDateLive,
   onRegisterScrollToToday,
+  onRegisterScrollToDate,
 }: TimelineCanvasProps) {
   const today = startOfDay(new Date());
 
@@ -217,11 +221,12 @@ export default function TimelineCanvas({
   // ---------------------------------------------------------------------------
   // Scroll refs
   // ---------------------------------------------------------------------------
-  const containerRef        = useRef<HTMLDivElement>(null);
-  const pendingScrollAdjRef  = useRef(0);          // left-extension compensation (px)
-  const rafRef               = useRef<number | null>(null);
-  const saveCenterTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevZoomRef          = useRef(zoom);
+  const containerRef          = useRef<HTMLDivElement>(null);
+  const pendingScrollAdjRef   = useRef(0);          // left-extension compensation (px)
+  const pendingNavigateDateRef = useRef<Date | null>(null); // navigate-to-date after view extends
+  const rafRef                = useRef<number | null>(null);
+  const saveCenterTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevZoomRef           = useRef(zoom);
 
   // Tracks the current viewport center date in real time.
   // Updated on every scroll, after scrollToToday, and after mount scroll.
@@ -234,14 +239,26 @@ export default function TimelineCanvas({
   scrollStateRef.current = { viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd };
 
   // ---------------------------------------------------------------------------
-  // useLayoutEffect — apply left-extension scroll compensation AFTER DOM update
+  // useLayoutEffect — runs after any view-bounds change.
+  // Priority 1: navigate to a pending date (after view extended to include it).
+  // Priority 2: compensate scrollLeft for left-side extension.
   // ---------------------------------------------------------------------------
   useLayoutEffect(() => {
-    if (pendingScrollAdjRef.current !== 0 && containerRef.current) {
+    if (!containerRef.current) return;
+    if (pendingNavigateDateRef.current !== null) {
+      const targetDate = pendingNavigateDateRef.current;
+      pendingNavigateDateRef.current = null;
+      pendingScrollAdjRef.current = 0; // discard left-extension adj — we're jumping anyway
+      const c = containerRef.current;
+      const centerX = dateToX(targetDate, viewStart, viewEnd, canvasWidth);
+      c.scrollLeft = Math.max(0, centerX - c.clientWidth / 2);
+      currentCenterDateRef.current = targetDate;
+      onCenterDateLive?.(format(targetDate, 'yyyy-MM-dd'));
+    } else if (pendingScrollAdjRef.current !== 0) {
       containerRef.current.scrollLeft += pendingScrollAdjRef.current;
       pendingScrollAdjRef.current = 0;
     }
-  }, [viewStart]); // runs after viewStart state update has widened the SVG
+  }, [viewStart, viewEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
   // Zoom transition — preserve viewport center date when zoom changes.
@@ -271,6 +288,7 @@ export default function TimelineCanvas({
     currentCenterDateRef.current = centerDate;
     const centerX = dateToX(centerDate, viewStart, viewEnd, canvasWidth);
     c.scrollLeft = Math.max(0, centerX - c.clientWidth / 2);
+    onCenterDateLive?.(format(centerDate, 'yyyy-MM-dd'));
   }, []); // mount only — eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
@@ -282,11 +300,37 @@ export default function TimelineCanvas({
     currentCenterDateRef.current = today;
     const todayXCenter = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom) / 2;
     c.scrollLeft = Math.max(0, todayXCenter - c.clientWidth / 2);
-  }, [viewStart, viewEnd, canvasWidth, zoom]);
+    onCenterDateLive?.(format(today, 'yyyy-MM-dd'));
+  }, [viewStart, viewEnd, canvasWidth, zoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     onRegisterScrollToToday?.(scrollToToday);
   }, [scrollToToday, onRegisterScrollToToday]);
+
+  // ---------------------------------------------------------------------------
+  // scrollToDate — jump to any date; extends view bounds if needed
+  // ---------------------------------------------------------------------------
+  const scrollToDate = useCallback((date: Date) => {
+    const c = containerRef.current;
+    if (!c) return;
+    const { viewStart, viewEnd, canvasWidth } = scrollStateRef.current;
+    if (isBefore(date, viewStart) || isAfter(date, viewEnd)) {
+      // Date outside current range — extend view, then scroll in useLayoutEffect
+      pendingNavigateDateRef.current = date;
+      if (isBefore(date, viewStart)) setViewStart(subDays(date, 200));
+      if (isAfter(date, viewEnd))   setViewEnd(addDays(date, 200));
+    } else {
+      // Date within range — scroll directly
+      const centerX = dateToX(date, viewStart, viewEnd, canvasWidth);
+      c.scrollLeft = Math.max(0, centerX - c.clientWidth / 2);
+      currentCenterDateRef.current = date;
+      onCenterDateLive?.(format(date, 'yyyy-MM-dd'));
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    onRegisterScrollToDate?.(scrollToDate);
+  }, [scrollToDate, onRegisterScrollToDate]);
 
   // ---------------------------------------------------------------------------
   // Scroll handler — rAF batched
@@ -328,7 +372,9 @@ export default function TimelineCanvas({
       }
 
       // Always keep center date ref current
-      currentCenterDateRef.current = xToDate(sl + vw / 2, viewStart, viewEnd, canvasWidth);
+      const centerDate = xToDate(sl + vw / 2, viewStart, viewEnd, canvasWidth);
+      currentCenterDateRef.current = centerDate;
+      onCenterDateLive?.(format(centerDate, 'yyyy-MM-dd'));
 
       // Debounced save of scroll center date
       if (saveCenterTimerRef.current) clearTimeout(saveCenterTimerRef.current);
