@@ -18,6 +18,7 @@ import {
 } from "date-fns";
 import type { Row, Task, ZoomLevel } from "../../types";
 import { computeEffectiveStatus } from "../../types";
+import { useLoadedWorkspace } from "../../context/WorkspaceContext";
 import { dateToX, xToDate, getInitialBounds, pxPerDay } from "../../lib/dateToX";
 
 // ---------------------------------------------------------------------------
@@ -130,6 +131,7 @@ export default function TimelineCanvas({
   onRegisterScrollToToday,
   onRegisterScrollToDate,
 }: TimelineCanvasProps) {
+  const { setPanel } = useLoadedWorkspace();
   const today = startOfDay(new Date());
 
   // Capture scrollCenterDate at mount only — never changes after that
@@ -545,7 +547,7 @@ export default function TimelineCanvas({
             const cx = x + w / 2;
             const r = MILESTONE_R;
             return (
-              <g key={task.id}>
+              <g key={task.id} style={{ cursor: "pointer" }} onClick={() => setPanel({ type: "task", taskId: task.id })}>
                 <polygon
                   points={`${cx},${barCenterY - r} ${cx + r},${barCenterY} ${cx},${barCenterY + r} ${cx - r},${barCenterY}`}
                   fill={task.color}
@@ -558,7 +560,7 @@ export default function TimelineCanvas({
           }
 
           return (
-            <g key={task.id}>
+            <g key={task.id} style={{ cursor: "pointer" }} onClick={() => setPanel({ type: "task", taskId: task.id })}>
               <rect
                 x={x}
                 y={barY}
