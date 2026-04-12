@@ -8,7 +8,7 @@ import NewTaskPanel from "./NewTaskPanel";
 import TaskDetailPanel from "./TaskDetailPanel";
 
 export default function TimelineView() {
-  const { workspace, tasks, addRow, updateRow, deleteRow, setScrollCenterDate, panel } = useLoadedWorkspace();
+  const { workspace, tasks, addRow, updateRow, reorderRows, deleteRow, setScrollCenterDate, panel, setPanel } = useLoadedWorkspace();
   const scrollToTodayRef = useRef<(() => void) | null>(null);
   const scrollToDateRef  = useRef<((date: Date) => void) | null>(null);
   const rowPanelBodyRef  = useRef<HTMLDivElement | null>(null);
@@ -88,6 +88,9 @@ export default function TimelineView() {
             await addRow(name);
           }}
           onDeleteRow={deleteRow}
+          onRename={(rowId, name) => updateRow(rowId, { name })}
+          onReorder={reorderRows}
+          onChangeColor={(rowId, color) => updateRow(rowId, { color })}
           onAddLane={(rowId) => {
             const row = sortedRows.find((r) => r.id === rowId);
             if (row) updateRow(rowId, { laneCount: (row.laneCount ?? 1) + 1 });
@@ -117,6 +120,13 @@ export default function TimelineView() {
           }}
         />
 
+        {/* Backdrop — clicking outside any open panel closes it */}
+        {(panel.type === "newTask" || panel.type === "task") && (
+          <div
+            className="absolute inset-0 z-[9]"
+            onClick={() => setPanel({ type: "none" })}
+          />
+        )}
         {panel.type === "newTask" && (
           <NewTaskPanel defaultDate={currentCenterDateStrRef.current} />
         )}

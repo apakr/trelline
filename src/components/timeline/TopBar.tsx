@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { parseISO, startOfDay } from "date-fns";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { ZoomLevel } from "../../types";
 import { useWorkspace, useLoadedWorkspace } from "../../context/WorkspaceContext";
 import DateNavPicker from "./DateNavPicker";
@@ -18,8 +19,24 @@ interface TopBarProps {
 
 export default function TopBar({ onScrollToToday, centerDateInputRef, onNavigateToDate }: TopBarProps) {
   const { closeWorkspace, setPanel } = useWorkspace();
-  const { workspace, setZoom, renameWorkspace } = useLoadedWorkspace();
+  const { workspace, folderPath, setZoom, renameWorkspace } = useLoadedWorkspace();
 
+  // Workspace dropdown
+  const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  const wsMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!wsMenuOpen) return;
+    function handle(e: MouseEvent) {
+      if (wsMenuRef.current && !wsMenuRef.current.contains(e.target as Node)) {
+        setWsMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [wsMenuOpen]);
+
+  // Inline rename
   const [isRenaming, setIsRenaming] = useState(false);
   const [draftName, setDraftName] = useState(workspace.name);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -60,6 +77,7 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, onNavigate
   }
 
   function startRename() {
+    setWsMenuOpen(false);
     setDraftName(workspace.name);
     setIsRenaming(true);
     setTimeout(() => inputRef.current?.select(), 0);
@@ -80,8 +98,8 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, onNavigate
 
   return (
     <div className="flex h-[52px] flex-shrink-0 items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4">
-      {/* Workspace name */}
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+      {/* Workspace name + dropdown */}
+      <div ref={wsMenuRef} className="relative flex min-w-0 flex-1 items-center gap-2">
         {isRenaming ? (
           <input
             ref={inputRef}
@@ -94,12 +112,44 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, onNavigate
           />
         ) : (
           <button
-            className="min-w-0 truncate rounded px-1 py-0.5 text-left text-sm font-semibold text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]"
-            onClick={startRename}
-            title="Click to rename workspace"
+            className="flex min-w-0 items-center gap-1 truncate rounded px-1 py-0.5 text-left text-sm font-semibold text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]"
+            onClick={() => setWsMenuOpen((o) => !o)}
           >
-            {workspace.name}
+            <span className="truncate">{workspace.name}</span>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 opacity-50">
+              <path d="M2 4l3 3 3-3" />
+            </svg>
           </button>
+        )}
+
+        {wsMenuOpen && (
+          <div className="absolute left-0 top-full z-50 mt-1 min-w-[200px] overflow-hidden rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-1 shadow-xl">
+            <button
+              onClick={startRename}
+              className="flex w-full items-center px-3 py-1.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]"
+            >
+              Rename workspace
+            </button>
+            <button
+              onClick={async () => {
+                setWsMenuOpen(false);
+                await revealItemInDir(folderPath);
+              }}
+              className="flex w-full items-center px-3 py-1.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]"
+            >
+              Open in Finder
+            </button>
+            <div className="my-1 border-t border-[var(--color-border)]" />
+            <button
+              onClick={() => {
+                setWsMenuOpen(false);
+                closeWorkspace();
+              }}
+              className="flex w-full items-center px-3 py-1.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]"
+            >
+              Open different workspace
+            </button>
+          </div>
         )}
       </div>
 
