@@ -29,7 +29,7 @@ export const ROW_HEIGHT = 48;
 
 const BAR_PAD_Y = 8;                        // vertical gap between bar and row edge
 const BAR_HEIGHT = ROW_HEIGHT - BAR_PAD_Y * 2; // 32px
-const MILESTONE_R = 9;                      // half-size of milestone diamond
+const MILESTONE_R = 13;                     // half-size of milestone diamond
 
 // ---------------------------------------------------------------------------
 // Column descriptor for the date axis
@@ -546,6 +546,21 @@ export default function TimelineCanvas({
           if (task.isMilestone) {
             const cx = x + w / 2;
             const r = MILESTONE_R;
+
+            // Label: truncate at 15 chars, show to the right if space is clear
+            const rawLabel = isDone ? `✓ ${task.title}` : task.title;
+            const displayLabel = rawLabel.length > 20 ? rawLabel.slice(0, 20) + "…" : rawLabel;
+            const labelX = cx + r + 6;
+            const labelEndX = labelX + displayLabel.length * 8; // ~8px/char estimate
+
+            // Show label only if no other task in this row occupies [labelX, labelEndX]
+            const hasLabelSpace = !tasks.some((other) => {
+              if (other.id === task.id || other.rowId !== task.rowId) return false;
+              const oLeft  = dateToX(parseISO(other.start), viewStart, viewEnd, canvasWidth);
+              const oRight = dateToX(addDays(parseISO(other.end), 1), viewStart, viewEnd, canvasWidth);
+              return oLeft < labelEndX && oRight > labelX;
+            });
+
             return (
               <g key={task.id} style={{ cursor: "pointer" }} onClick={() => setPanel({ type: "task", taskId: task.id })}>
                 <polygon
@@ -555,6 +570,18 @@ export default function TimelineCanvas({
                   stroke={isOverdue ? "#ef4444" : "none"}
                   strokeWidth={1.5}
                 />
+                {hasLabelSpace && (
+                  <text
+                    x={labelX}
+                    y={barCenterY + 4}
+                    fontSize={12}
+                    fill="white"
+                    fillOpacity={0.85}
+                    style={{ pointerEvents: "none", userSelect: "none" }}
+                  >
+                    {displayLabel}
+                  </text>
+                )}
               </g>
             );
           }

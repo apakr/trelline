@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { addDays, format, parseISO } from "date-fns";
 import { useLoadedWorkspace } from "../../context/WorkspaceContext";
+import PanelDateField from "./PanelDateField";
 
 interface NewTaskPanelProps {
   defaultDate: string; // YYYY-MM-DD — the current canvas center date
@@ -12,18 +13,26 @@ export default function NewTaskPanel({ defaultDate }: NewTaskPanelProps) {
 
   const safeDefault = defaultDate || format(new Date(), "yyyy-MM-dd");
 
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setPanel({ type: "none" });
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [title, setTitle] = useState("");
   const [rowId, setRowId] = useState(rows[0]?.id ?? "");
   const [startDate, setStartDate] = useState(safeDefault);
   const [endDate, setEndDate] = useState(() => {
     try {
-      const d = parseISO(safeDefault);
-      return format(addDays(d, 7), "yyyy-MM-dd");
+      return format(addDays(parseISO(safeDefault), 7), "yyyy-MM-dd");
     } catch {
       return safeDefault;
     }
   });
   const [isMilestone, setIsMilestone] = useState(false);
+  const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -37,6 +46,7 @@ export default function NewTaskPanel({ defaultDate }: NewTaskPanelProps) {
         start: startDate,
         end: isMilestone ? startDate : endDate,
         isMilestone,
+        notes,
       });
       setPanel({ type: "none" });
     } finally {
@@ -45,7 +55,7 @@ export default function NewTaskPanel({ defaultDate }: NewTaskPanelProps) {
   }
 
   return (
-    <div className="absolute right-0 top-0 bottom-0 z-10 flex w-80 flex-col border-l border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-xl">
+    <div className="absolute right-0 top-0 bottom-0 z-10 flex w-[480px] flex-col border-l border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-xl">
       {/* Header */}
       <div className="flex flex-shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
         <span className="text-sm font-semibold text-[var(--color-text-primary)]">New Task</span>
@@ -81,6 +91,7 @@ export default function NewTaskPanel({ defaultDate }: NewTaskPanelProps) {
             <select
               value={rowId}
               onChange={(e) => setRowId(e.target.value)}
+              style={{ colorScheme: "dark" }}
               className="rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
             >
               {rows.map((row) => (
@@ -102,28 +113,32 @@ export default function NewTaskPanel({ defaultDate }: NewTaskPanelProps) {
         </label>
 
         {/* Start date */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-[var(--color-text-secondary)]">Start Date</label>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
-          />
-        </div>
+        <PanelDateField
+          label="Start Date"
+          value={startDate}
+          onChange={setStartDate}
+        />
 
         {/* End date — hidden when milestone */}
         {!isMilestone && (
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-[var(--color-text-secondary)]">End Date</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
-            />
-          </div>
+          <PanelDateField
+            label="End Date"
+            value={endDate}
+            onChange={setEndDate}
+          />
         )}
+
+        {/* Description */}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-[var(--color-text-secondary)]">Description</label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Add notes or details..."
+            rows={16}
+            className="resize-none rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] focus:border-[var(--color-accent)] focus:outline-none"
+          />
+        </div>
 
         <div className="mt-auto pt-2">
           <button

@@ -77,6 +77,7 @@ export interface NewTaskInput {
   end: string;   // "YYYY-MM-DD"
   isMilestone?: boolean;
   color?: string;
+  notes?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +310,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       status: "not_done",
       color: input.color ?? row?.color ?? DEFAULT_ROW_COLOR,
       isMilestone: input.isMilestone ?? false,
-      notes: "",
+      notes: input.notes ?? "",
       dependencies: [],
       createdAt: now,
       updatedAt: now,
