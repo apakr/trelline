@@ -1,3 +1,4 @@
+import { type RefObject } from "react";
 import type { Row } from "../../types";
 
 /**
@@ -17,6 +18,7 @@ interface RowPanelProps {
   taskCountByRowId: Map<string, number>;
   rowLaneCount: Map<string, number>;
   rowMinLaneCount: Map<string, number>;
+  scrollContainerRef?: RefObject<HTMLDivElement | null>;
   onAddRow: () => void;
   onDeleteRow: (rowId: string) => void;
   onAddLane: (rowId: string) => void;
@@ -28,6 +30,7 @@ export default function RowPanel({
   taskCountByRowId,
   rowLaneCount,
   rowMinLaneCount,
+  scrollContainerRef,
   onAddRow,
   onDeleteRow,
   onAddLane,
@@ -58,8 +61,8 @@ export default function RowPanel({
         </button>
       </div>
 
-      {/* Row list */}
-      <div className="overflow-hidden" style={{ flex: 1 }}>
+      {/* Row list — overflow-hidden hides the scrollbar; scrollTop is driven by the canvas */}
+      <div ref={scrollContainerRef} className="overflow-hidden" style={{ flex: 1 }}>
         {rows.length === 0 ? (
           <div
             className="flex items-center justify-center text-xs text-[var(--color-text-secondary)]"
@@ -68,19 +71,23 @@ export default function RowPanel({
             No rows yet
           </div>
         ) : (
-          rows.map((row) => (
-            <RowItem
-              key={row.id}
-              row={row}
-              taskCount={taskCountByRowId.get(row.id) ?? 0}
-              height={ROW_HEIGHT * (rowLaneCount.get(row.id) ?? 1)}
-              laneCount={rowLaneCount.get(row.id) ?? 1}
-              minLaneCount={rowMinLaneCount.get(row.id) ?? 1}
-              onDelete={() => onDeleteRow(row.id)}
-              onAddLane={() => onAddLane(row.id)}
-              onRemoveLane={() => onRemoveLane(row.id)}
-            />
-          ))
+          <>
+            {rows.map((row) => (
+              <RowItem
+                key={row.id}
+                row={row}
+                taskCount={taskCountByRowId.get(row.id) ?? 0}
+                height={ROW_HEIGHT * (rowLaneCount.get(row.id) ?? 1)}
+                laneCount={rowLaneCount.get(row.id) ?? 1}
+                minLaneCount={rowMinLaneCount.get(row.id) ?? 1}
+                onDelete={() => onDeleteRow(row.id)}
+                onAddLane={() => onAddLane(row.id)}
+                onRemoveLane={() => onRemoveLane(row.id)}
+              />
+            ))}
+            {/* Bottom padding — matches the 2-lane blank space in the canvas */}
+            <div style={{ height: ROW_HEIGHT * 2, flexShrink: 0 }} />
+          </>
         )}
       </div>
     </div>
@@ -155,14 +162,15 @@ function RowItem({
         {/* Delete row button + task count */}
         <div className="flex items-center gap-1">
           {taskCount > 0 && (
-            <span className="rounded bg-[var(--color-bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)] group-hover:hidden">
+            <span className="rounded bg-[var(--color-bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
               {taskCount}
             </span>
           )}
           <button
-            onClick={onDelete}
-            title="Delete row"
-            className="hidden rounded p-0.5 text-[var(--color-text-secondary)] hover:bg-red-500/15 hover:text-red-400 group-hover:flex"
+            onClick={taskCount > 0 ? undefined : onDelete}
+            disabled={taskCount > 0}
+            title={taskCount > 0 ? `Cannot delete — ${taskCount} task${taskCount > 1 ? "s" : ""} in this row` : "Delete row"}
+            className="hidden rounded p-0.5 text-[var(--color-text-secondary)] hover:bg-red-500/15 hover:text-red-400 group-hover:flex disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--color-text-secondary)]"
           >
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
               <path d="M2.5 4h8M5 4V2.5h3V4M5.5 6.5v3M7.5 6.5v3M3.5 4l.5 6.5h5.5L10 4" />

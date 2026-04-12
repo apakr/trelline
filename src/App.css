@@ -28,3 +28,59 @@ body,
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ── Rich text editor (Tiptap) ─────────────────────────────────────────── */
+.rich-editor .tiptap {
+  outline: none;
+  min-height: 200px;
+}
+
+.rich-editor .tiptap > * + * {
+  margin-top: 0.5em;
+}
+
+.rich-editor .tiptap h1 { font-size: 1.4em; font-weight: 700; }
+.rich-editor .tiptap h2 { font-size: 1.2em; font-weight: 600; }
+.rich-editor .tiptap h3 { font-size: 1.05em; font-weight: 600; }
+
+.rich-editor .tiptap strong { font-weight: 700; }
+.rich-editor .tiptap em { font-style: italic; }
+.rich-editor .tiptap u { text-decoration: underline; }
+
+.rich-editor .tiptap a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.rich-editor .tiptap ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+
+.rich-editor .tiptap ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+
+.rich-editor .tiptap li + li {
+  margin-top: 0.15em;
+}
+
+.rich-editor .tiptap pre {
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.6em 0.8em;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  overflow-x: auto;
+}
+
+.rich-editor .tiptap code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  background: var(--color-bg-base);
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+}

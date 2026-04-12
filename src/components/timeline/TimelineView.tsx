@@ -11,6 +11,7 @@ export default function TimelineView() {
   const { workspace, tasks, addRow, updateRow, deleteRow, setScrollCenterDate, panel } = useLoadedWorkspace();
   const scrollToTodayRef = useRef<(() => void) | null>(null);
   const scrollToDateRef  = useRef<((date: Date) => void) | null>(null);
+  const rowPanelBodyRef  = useRef<HTMLDivElement | null>(null);
   const centerDateInputRef = useRef<HTMLInputElement>(null);
 
   // Tracks the current canvas center date string in real time (updated on every scroll).
@@ -81,6 +82,7 @@ export default function TimelineView() {
           taskCountByRowId={taskCountByRowId}
           rowLaneCount={rowLaneCount}
           rowMinLaneCount={rowMinLaneCount}
+          scrollContainerRef={rowPanelBodyRef}
           onAddRow={async () => {
             const name = `Row ${sortedRows.length + 1}`;
             await addRow(name);
@@ -110,6 +112,9 @@ export default function TimelineView() {
           onCenterDateLive={handleCenterDateLive}
           onRegisterScrollToToday={(fn) => { scrollToTodayRef.current = fn; }}
           onRegisterScrollToDate={(fn) => { scrollToDateRef.current = fn; }}
+          onVerticalScroll={(top) => {
+            if (rowPanelBodyRef.current) rowPanelBodyRef.current.scrollTop = top;
+          }}
         />
 
         {panel.type === "newTask" && (

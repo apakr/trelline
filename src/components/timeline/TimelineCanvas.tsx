@@ -121,6 +121,7 @@ export interface TimelineCanvasProps {
   onCenterDateLive?: (dateStr: string) => void;        // fires on every scroll, updates display
   onRegisterScrollToToday?: (fn: () => void) => void;
   onRegisterScrollToDate?: (fn: (date: Date) => void) => void;
+  onVerticalScroll?: (scrollTop: number) => void;
 }
 
 export default function TimelineCanvas({
@@ -134,6 +135,7 @@ export default function TimelineCanvas({
   onCenterDateLive,
   onRegisterScrollToToday,
   onRegisterScrollToDate,
+  onVerticalScroll,
 }: TimelineCanvasProps) {
   const { setPanel, updateTask, updateRow, batchUpdateTasks } = useLoadedWorkspace();
   const today = startOfDay(new Date());
@@ -222,12 +224,15 @@ export default function TimelineCanvas({
     return map;
   }, [sortedRows, rowLaneCount]);
 
-  const svgHeight = useMemo(() => {
+  const gridHeight = useMemo(() => {
     return sortedRows.reduce(
       (acc, row) => acc + (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT,
       HEADER_HEIGHT
     );
   }, [sortedRows, rowLaneCount]);
+
+  // svgHeight extends 2 lanes below the last row for blank scroll padding
+  const svgHeight = gridHeight + 2 * ROW_HEIGHT;
 
   // ---------------------------------------------------------------------------
   // Scroll refs
@@ -503,7 +508,11 @@ export default function TimelineCanvas({
   // ---------------------------------------------------------------------------
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     const sl = e.currentTarget.scrollLeft;
+    const st = e.currentTarget.scrollTop;
     const vw = containerRef.current!.clientWidth;
+
+    // Keep RowPanel in sync with vertical scroll immediately (outside rAF)
+    onVerticalScroll?.(st);
 
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
@@ -911,7 +920,7 @@ export default function TimelineCanvas({
           <rect
             key={`colbg-${col.key}`}
             x={col.x} y={HEADER_HEIGHT}
-            width={col.width} height={svgHeight - HEADER_HEIGHT}
+            width={col.width} height={gridHeight - HEADER_HEIGHT}
             fill={col.isWeekend ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.03)"}
           />
         ))}
@@ -923,7 +932,7 @@ export default function TimelineCanvas({
               <rect
                 key={`colbg-${col.key}-${offset}`}
                 x={col.x + offset * pxPerDay("weeks")} y={HEADER_HEIGHT}
-                width={pxPerDay("weeks")} height={svgHeight - HEADER_HEIGHT}
+                width={pxPerDay("weeks")} height={gridHeight - HEADER_HEIGHT}
                 fill={isWeekend ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.03)"}
               />
             );
@@ -933,7 +942,7 @@ export default function TimelineCanvas({
           <rect
             key={`colbg-${ws.date.toISOString()}`}
             x={ws.x} y={HEADER_HEIGHT}
-            width={7 * pxPerDay("months")} height={svgHeight - HEADER_HEIGHT}
+            width={7 * pxPerDay("months")} height={gridHeight - HEADER_HEIGHT}
             fill={i % 2 === 0 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.18)"}
           />
         ))}
@@ -959,7 +968,7 @@ export default function TimelineCanvas({
           <line
             key={col.key}
             x1={col.x} y1={HEADER_HEIGHT}
-            x2={col.x} y2={svgHeight}
+            x2={col.x} y2={gridHeight}
             stroke="rgba(255,255,255,0.08)"
             strokeWidth={1}
           />
@@ -971,7 +980,7 @@ export default function TimelineCanvas({
             <line
               key={`daysub-${col.key}-${offset}`}
               x1={col.x + offset * pxPerDay("weeks")} y1={HEADER_HEIGHT}
-              x2={col.x + offset * pxPerDay("weeks")} y2={svgHeight}
+              x2={col.x + offset * pxPerDay("weeks")} y2={gridHeight}
               stroke="rgba(255,255,255,0.08)"
               strokeWidth={1}
             />
@@ -981,7 +990,7 @@ export default function TimelineCanvas({
           <line
             key={`wksep-${ws.date.toISOString()}`}
             x1={ws.x} y1={HEADER_HEIGHT}
-            x2={ws.x} y2={svgHeight}
+            x2={ws.x} y2={gridHeight}
             stroke="rgba(255,255,255,0.08)"
             strokeWidth={1}
           />
@@ -991,7 +1000,7 @@ export default function TimelineCanvas({
             <line
               key={`daysub-${col.key}-${i + 1}`}
               x1={col.x + (i + 1) * pxPerDay("months")} y1={HEADER_HEIGHT}
-              x2={col.x + (i + 1) * pxPerDay("months")} y2={svgHeight}
+              x2={col.x + (i + 1) * pxPerDay("months")} y2={gridHeight}
               stroke="rgba(255,255,255,0.08)"
               strokeWidth={1}
             />
@@ -1002,7 +1011,7 @@ export default function TimelineCanvas({
         {todayVisible && (
           <line
             x1={todayX} y1={HEADER_HEIGHT}
-            x2={todayX} y2={svgHeight}
+            x2={todayX} y2={gridHeight}
             stroke="#f87171"
             strokeWidth={1.5}
           />

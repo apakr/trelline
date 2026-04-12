@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import type { TaskStatus } from "../../types";
 import { useLoadedWorkspace } from "../../context/WorkspaceContext";
 import PanelDateField from "./PanelDateField";
+import RichTextEditor from "./RichTextEditor";
 
 interface TaskDetailPanelProps {
   taskId: string;
@@ -15,9 +16,8 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
   // Set to true when Escape closes the panel — blur handlers check this to skip saving
   const skipSaveRef = useRef(false);
 
-  // Local draft state for blur-saved fields
+  // Local draft state for the title (blur-saved); notes save on every keystroke
   const [draftTitle, setDraftTitle] = useState(task?.title ?? "");
-  const [draftNotes, setDraftNotes] = useState(task?.notes ?? "");
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -30,12 +30,9 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset drafts when switching to a different task
+  // Reset title draft when switching to a different task
   useEffect(() => {
-    if (task) {
-      setDraftTitle(task.title);
-      setDraftNotes(task.notes);
-    }
+    if (task) setDraftTitle(task.title);
   }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!task) return null;
@@ -49,13 +46,6 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
     }
     if (trimmed !== task!.title) {
       await updateTask(taskId, { title: trimmed });
-    }
-  }
-
-  async function handleNotesBlur() {
-    if (skipSaveRef.current) return;
-    if (draftNotes !== task!.notes) {
-      await updateTask(taskId, { notes: draftNotes });
     }
   }
 
@@ -163,12 +153,9 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
         {/* Description */}
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-[var(--color-text-secondary)]">Description</label>
-          <textarea
-            value={draftNotes}
-            onChange={(e) => setDraftNotes(e.target.value)}
-            onBlur={handleNotesBlur}
-            rows={16}
-            className="resize-none rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
+          <RichTextEditor
+            value={task.notes}
+            onChange={(md) => updateTask(taskId, { notes: md })}
           />
         </div>
       </div>
