@@ -139,7 +139,7 @@ export default function TimelineCanvas({
   onRegisterScrollToDate,
   onVerticalScroll,
 }: TimelineCanvasProps) {
-  const { setPanel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask, appConfig } = useLoadedWorkspace();
+  const { setPanel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask, pushSnapshot, appConfig } = useLoadedWorkspace();
   const settings = appConfig.settings;
   const weekStartsOn: 0 | 1 | 6 = settings.weekStartDay === "saturday" ? 6 : settings.weekStartDay === "sunday" ? 0 : 1;
   const today = startOfDay(new Date());
@@ -320,6 +320,8 @@ export default function TimelineCanvas({
   batchUpdateTasksRef.current  = batchUpdateTasks;
   const updateRowRef           = useRef(updateRow);
   updateRowRef.current         = updateRow;
+  const pushSnapshotRef        = useRef(pushSnapshot);
+  pushSnapshotRef.current      = pushSnapshot;
 
   // cursor position during drag — read by the auto-scroll RAF loop
   const dragClientXRef    = useRef(0);
@@ -864,10 +866,12 @@ export default function TimelineCanvas({
       } else if (ds.type === "move" && indicator) {
         // ── NORMAL DROP: cursor in an empty lane or middle of lane with no task
         baseUpdates.lane = indicator.lane;
+        pushSnapshotRef.current();
         updateTaskRef.current(ds.taskId, baseUpdates);
 
       } else {
         // ── RESIZE or move with no indicator (shouldn't normally happen) ──
+        pushSnapshotRef.current();
         updateTaskRef.current(ds.taskId, baseUpdates);
       }
     }
@@ -1057,6 +1061,7 @@ export default function TimelineCanvas({
     const allTasks = tasksRef.current;
     const succTask = allTasks.find((t) => t.id === succId);
     if (!succTask) return;
+    pushSnapshotRef.current();
     await updateTaskRef.current(succId, {
       dependencies: succTask.dependencies.filter((d) => d !== predId),
     });
@@ -1139,6 +1144,7 @@ export default function TimelineCanvas({
       if (succTask.dependencies.includes(predId)) return;
       if (wouldCreateCycle(allTasks, predId, succId)) return;
 
+      pushSnapshotRef.current();
       await updateTaskRef.current(succId, {
         dependencies: [...succTask.dependencies, predId],
       });

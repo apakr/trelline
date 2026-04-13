@@ -33,6 +33,11 @@ import {
 
 const DEFAULT_ROW_COLOR = "#6366f1";
 
+// Snapshot stored in undo/redo stacks — captures only the mutable data that
+// users expect Ctrl+Z to restore (rows + tasks). Zoom, scroll, name etc. are
+// intentionally excluded.
+type UndoSnapshot = { rows: Row[]; tasks: Task[] };
+
 // ---------------------------------------------------------------------------
 // Context shape
 // ---------------------------------------------------------------------------
@@ -77,6 +82,13 @@ interface WorkspaceContextValue {
   deleteLaneAndTask: (taskId: string, insertedLane?: { rowId: string; lane: number }) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
 
+  // Undo / redo
+  canUndo: boolean;
+  canRedo: boolean;
+  pushSnapshot: () => void;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
+
   // UI
   setPanel: (panel: PanelState) => void;
   clearError: () => void;
@@ -105,6 +117,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [panel, setPanel] = useState<PanelState>({ type: "none" });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<UndoSnapshot[]>([]);
 
   // Tracks scrollCenterDate out-of-band (no setState → no re-renders on scroll save).
   // Must be kept in sync when workspaces are loaded/closed and injected into every
@@ -138,6 +152,94 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }
 
   // -------------------------------------------------------------------------
+  // Undo / redo
+  // -------------------------------------------------------------------------
+
+  // Capture the current rows+tasks as an undo point and push it onto the stack.
+  // Also clears the redo stack — any new action kills the redo branch.
+  const pushSnapshot = useCallback(() => {
+    if (!workspaceState) return;
+    const snap: UndoSnapshot = {
+      rows: workspaceState.workspace.rows,
+      tasks: workspaceState.tasks,
+    };
+    setUndoStack(prev => [...prev.slice(-49), snap]);
+    setRedoStack([]);
+  }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Writes a snapshot's tasks/rows back to disk, diffing against the state
+  // that was current at the time undo/redo was triggered.
+  async function syncSnapshotToDisk(snap: UndoSnapshot, state: WorkspaceState) {
+    const currentMap = new Map(state.tasks.map(t => [t.id, t]));
+    const snapMap    = new Map(snap.tasks.map(t => [t.id, t]));
+    const ops: Promise<void>[] = [];
+
+    // Tasks present in the snapshot: re-save if missing or changed
+    for (const t of snap.tasks) {
+      const cur = currentMap.get(t.id);
+      if (!cur || cur.updatedAt !== t.updatedAt) {
+        ops.push(saveTask(state.folderPath, t));
+      }
+    }
+    // Tasks in current state that the snapshot doesn't have: delete
+    for (const [id] of currentMap) {
+      if (!snapMap.has(id)) {
+        ops.push(deleteTaskFile(state.folderPath, id));
+      }
+    }
+    // Rows are in workspace.json
+    ops.push(saveWorkspace(state.folderPath, withScrollCenter({ ...state.workspace, rows: snap.rows })));
+    await Promise.all(ops);
+  }
+
+  const undo = useCallback(async () => {
+    if (!workspaceState || undoStack.length === 0) return;
+    const snap = undoStack[undoStack.length - 1];
+    const current: UndoSnapshot = {
+      rows: workspaceState.workspace.rows,
+      tasks: workspaceState.tasks,
+    };
+    setUndoStack(prev => prev.slice(0, -1));
+    setRedoStack(prev => [...prev.slice(-49), current]);
+    const next: WorkspaceState = {
+      ...workspaceState,
+      workspace: { ...workspaceState.workspace, rows: snap.rows },
+      tasks: snap.tasks,
+    };
+    setWorkspaceState(next);
+    // Close the detail panel if the task it was showing no longer exists
+    setPanel(prev =>
+      prev.type === "task" && !snap.tasks.find(t => t.id === prev.taskId)
+        ? { type: "none" }
+        : prev
+    );
+    await syncSnapshotToDisk(snap, workspaceState);
+  }, [workspaceState, undoStack]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const redo = useCallback(async () => {
+    if (!workspaceState || redoStack.length === 0) return;
+    const snap = redoStack[redoStack.length - 1];
+    const current: UndoSnapshot = {
+      rows: workspaceState.workspace.rows,
+      tasks: workspaceState.tasks,
+    };
+    setRedoStack(prev => prev.slice(0, -1));
+    setUndoStack(prev => [...prev.slice(-49), current]);
+    const next: WorkspaceState = {
+      ...workspaceState,
+      workspace: { ...workspaceState.workspace, rows: snap.rows },
+      tasks: snap.tasks,
+    };
+    setWorkspaceState(next);
+    setPanel(prev =>
+      prev.type === "task" && !snap.tasks.find(t => t.id === prev.taskId)
+        ? { type: "none" }
+        : prev
+    );
+    await syncSnapshotToDisk(snap, workspaceState);
+  }, [workspaceState, redoStack]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -------------------------------------------------------------------------
   // Workspace lifecycle
   // -------------------------------------------------------------------------
 
@@ -153,6 +255,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const state = await openWorkspace(folderPath);
       scrollCenterDateRef.current = state.workspace.scrollCenterDate;
       setWorkspaceState(state);
+      setUndoStack([]);
+      setRedoStack([]);
       setPanel({ type: "none" });
       await addRecentWorkspace({
         folderPath,
@@ -200,6 +304,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const closeWorkspace = useCallback(() => {
     scrollCenterDateRef.current = undefined;
     setWorkspaceState(null);
+    setUndoStack([]);
+    setRedoStack([]);
     setPanel({ type: "none" });
   }, []);
 
@@ -236,6 +342,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // -------------------------------------------------------------------------
 
   const addRow = useCallback(async (name: string): Promise<Row> => {
+    pushSnapshot();
     const current = requireState();
     const row: Row = {
       id: `row_${uuidv4()}`,
@@ -252,6 +359,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const updateRow = useCallback(
     async (rowId: string, updates: Partial<Pick<Row, "name" | "color" | "laneCount">>) => {
+      pushSnapshot();
       const current = requireState();
       const updatedRows = current.workspace.rows.map((r) =>
         r.id === rowId ? { ...r, ...updates } : r
@@ -263,6 +371,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   );
 
   const reorderRows = useCallback(async (orderedIds: string[]) => {
+    pushSnapshot();
     const current = requireState();
     const rowMap = new Map(current.workspace.rows.map((r) => [r.id, r]));
     const updatedRows = orderedIds
@@ -273,6 +382,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const deleteRow = useCallback(async (rowId: string) => {
+    pushSnapshot();
     const current = requireState();
 
     // Delete all tasks belonging to this row
@@ -313,6 +423,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // -------------------------------------------------------------------------
 
   const createTask = useCallback(async (input: NewTaskInput): Promise<Task> => {
+    pushSnapshot();
     const current = requireState();
     const row = current.workspace.rows.find((r) => r.id === input.rowId);
     const now = new Date().toISOString();
@@ -383,6 +494,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       rowUpdate?: { rowId: string; laneCount: number }
     ) => {
       if (updates.length === 0 && !rowUpdate) return;
+      pushSnapshot();
       const current = requireState();
       const now = new Date().toISOString();
       const updateMap = new Map(updates.map((u) => [u.taskId, u.changes]));
@@ -418,6 +530,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const insertLaneAndCreateTask = useCallback(
     async (rowId: string, insertAtLane: number, taskInput: NewTaskInput): Promise<Task> => {
+      pushSnapshot();
       const current = requireState();
       const now = new Date().toISOString();
 
@@ -483,6 +596,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
    */
   const deleteLaneAndTask = useCallback(
     async (taskId: string, insertedLane?: { rowId: string; lane: number }) => {
+      pushSnapshot();
       const current = requireState();
       const now = new Date().toISOString();
 
@@ -538,6 +652,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   );
 
   const deleteTask = useCallback(async (taskId: string) => {
+    pushSnapshot();
     const current = requireState();
 
     // Remove from other tasks' dependency lists
@@ -608,6 +723,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     insertLaneAndCreateTask,
     deleteLaneAndTask,
     deleteTask,
+
+    canUndo: undoStack.length > 0,
+    canRedo: redoStack.length > 0,
+    pushSnapshot,
+    undo,
+    redo,
 
     setPanel,
     clearError: () => setError(null),

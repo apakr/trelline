@@ -6,7 +6,28 @@ import TimelineView from "./components/timeline/TimelineView";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 export default function App() {
-  const { workspaceState, loadWorkspace, refreshAppConfig } = useWorkspace();
+  const { workspaceState, loadWorkspace, refreshAppConfig, undo, redo } = useWorkspace();
+
+  // Stable refs so the effect doesn't need to re-register on every render
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
+  const redoRef = useRef(redo);
+  redoRef.current = redo;
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoRef.current();
+      } else if (e.key === "y" || (e.key === "z" && e.shiftKey)) {
+        e.preventDefault();
+        redoRef.current();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [isInitializing, setIsInitializing] = useState(true);
 
   // Capture a stable ref to loadWorkspace so the effect below never needs to

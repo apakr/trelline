@@ -10,12 +10,15 @@ interface TaskDetailPanelProps {
 }
 
 export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPanelProps) {
-  const { workspace, tasks, updateTask, deleteTask, deleteLaneAndTask, setPanel } = useLoadedWorkspace();
+  const { workspace, tasks, updateTask, deleteTask, deleteLaneAndTask, setPanel, pushSnapshot } = useLoadedWorkspace();
   const rows = workspace.rows.slice().sort((a, b) => a.order - b.order);
   const task = tasks.find((t) => t.id === taskId);
 
   // Set to true when Escape closes the panel — blur handlers check this to skip saving
   const skipSaveRef = useRef(false);
+  // Tracks whether the notes area is currently focused so toolbar clicks don't
+  // push duplicate undo snapshots (focus re-enters the contenteditable after toolbar).
+  const notesFocusedRef = useRef(false);
 
   // Local draft state for the title (blur-saved); notes save on every keystroke
   const [draftTitle, setDraftTitle] = useState(task?.title ?? "");
@@ -99,6 +102,7 @@ export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPane
           <input
             type="text"
             value={draftTitle}
+            onFocus={pushSnapshot}
             onChange={handleTitleChange}
             onBlur={handleTitleBlur}
             autoFocus={task.title === ""}
@@ -111,7 +115,7 @@ export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPane
           <label className="text-xs font-medium text-[var(--color-text-secondary)]">Status</label>
           <select
             value={task.status}
-            onChange={(e) => updateTask(taskId, { status: e.target.value as TaskStatus })}
+            onChange={(e) => { pushSnapshot(); updateTask(taskId, { status: e.target.value as TaskStatus }); }}
             style={{ colorScheme: "dark" }}
             className="rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
           >
@@ -125,7 +129,7 @@ export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPane
           <label className="text-xs font-medium text-[var(--color-text-secondary)]">Row</label>
           <select
             value={task.rowId}
-            onChange={(e) => updateTask(taskId, { rowId: e.target.value })}
+            onChange={(e) => { pushSnapshot(); updateTask(taskId, { rowId: e.target.value }); }}
             style={{ colorScheme: "dark" }}
             className="rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
           >
@@ -141,6 +145,7 @@ export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPane
           <input
             type="color"
             value={task.color}
+            onFocus={pushSnapshot}
             onChange={(e) => updateTask(taskId, { color: e.target.value })}
             className="h-8 w-full cursor-pointer rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-1 py-0.5"
           />
@@ -151,7 +156,7 @@ export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPane
           <input
             type="checkbox"
             checked={task.isMilestone}
-            onChange={(e) => updateTask(taskId, { isMilestone: e.target.checked })}
+            onChange={(e) => { pushSnapshot(); updateTask(taskId, { isMilestone: e.target.checked }); }}
             className="accent-[var(--color-accent)]"
           />
           <span className="text-sm text-[var(--color-text-primary)]">Milestone</span>
@@ -161,7 +166,7 @@ export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPane
         <PanelDateField
           label="Start Date"
           value={task.start}
-          onChange={(dateStr) => updateTask(taskId, { start: dateStr })}
+          onChange={(dateStr) => { pushSnapshot(); updateTask(taskId, { start: dateStr }); }}
         />
 
         {/* End date — hidden if milestone */}
@@ -169,17 +174,32 @@ export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPane
           <PanelDateField
             label="End Date"
             value={task.end}
-            onChange={(dateStr) => updateTask(taskId, { end: dateStr })}
+            onChange={(dateStr) => { pushSnapshot(); updateTask(taskId, { end: dateStr }); }}
           />
         )}
 
         {/* Description */}
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-[var(--color-text-secondary)]">Description</label>
-          <RichTextEditor
-            value={task.notes}
-            onChange={(md) => updateTask(taskId, { notes: md })}
-          />
+          <div
+            onFocus={() => {
+              if (!notesFocusedRef.current) {
+                notesFocusedRef.current = true;
+                pushSnapshot();
+              }
+            }}
+            onBlur={(e) => {
+              // Only clear the flag when focus truly leaves the notes area
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                notesFocusedRef.current = false;
+              }
+            }}
+          >
+            <RichTextEditor
+              value={task.notes}
+              onChange={(md) => updateTask(taskId, { notes: md })}
+            />
+          </div>
         </div>
       </div>
 
