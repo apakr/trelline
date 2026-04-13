@@ -6,10 +6,11 @@ import RichTextEditor from "./RichTextEditor";
 
 interface TaskDetailPanelProps {
   taskId: string;
+  insertedLane?: { rowId: string; lane: number };
 }
 
-export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
-  const { workspace, tasks, updateTask, deleteTask, setPanel } = useLoadedWorkspace();
+export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPanelProps) {
+  const { workspace, tasks, updateTask, deleteTask, deleteLaneAndTask, setPanel } = useLoadedWorkspace();
   const rows = workspace.rows.slice().sort((a, b) => a.order - b.order);
   const task = tasks.find((t) => t.id === taskId);
 
@@ -23,13 +24,18 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
   const draftTitleRef = useRef(draftTitle);
   draftTitleRef.current = draftTitle;
 
+  // Refs so closures always read fresh values without re-registering effects
+  const insertedLaneRef = useRef(insertedLane);
+  insertedLaneRef.current = insertedLane;
+  const deleteLaneAndTaskRef = useRef(deleteLaneAndTask);
+  deleteLaneAndTaskRef.current = deleteLaneAndTask;
+
   useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
+    async function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         skipSaveRef.current = true;
-        // If the task has no title yet (created via canvas click), delete it on Escape
         if (!draftTitleRef.current.trim()) {
-          deleteTask(taskId);
+          await deleteLaneAndTaskRef.current(taskId, insertedLaneRef.current);
         }
         setPanel({ type: "none" });
       }
@@ -44,6 +50,14 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
   }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!task) return null;
+
+  async function handleTitleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const val = e.target.value;
+    setDraftTitle(val);
+    if (val.trim()) {
+      await updateTask(taskId, { title: val });
+    }
+  }
 
   async function handleTitleBlur() {
     if (skipSaveRef.current) return;
@@ -85,7 +99,7 @@ export default function TaskDetailPanel({ taskId }: TaskDetailPanelProps) {
           <input
             type="text"
             value={draftTitle}
-            onChange={(e) => setDraftTitle(e.target.value)}
+            onChange={handleTitleChange}
             onBlur={handleTitleBlur}
             autoFocus={task.title === ""}
             className="rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"

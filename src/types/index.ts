@@ -76,7 +76,7 @@ export interface AppConfig {
 
 export type PanelState =
   | { type: "none" }
-  | { type: "task"; taskId: string }
+  | { type: "task"; taskId: string; insertedLane?: { rowId: string; lane: number } }
   | { type: "newTask" };
 
 // ---------------------------------------------------------------------------

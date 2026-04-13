@@ -137,7 +137,7 @@ export default function TimelineCanvas({
   onRegisterScrollToDate,
   onVerticalScroll,
 }: TimelineCanvasProps) {
-  const { setPanel, updateTask, updateRow, batchUpdateTasks, createTask } = useLoadedWorkspace();
+  const { setPanel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask } = useLoadedWorkspace();
   const today = startOfDay(new Date());
 
   // Capture scrollCenterDate at mount only — never changes after that
@@ -280,6 +280,22 @@ export default function TimelineCanvas({
   };
   const dragStateRef    = useRef<DragState | null>(null);
   const justDraggedRef         = useRef(false); // blocks onClick after a real drag
+
+  // ---------------------------------------------------------------------------
+  // Drag-to-create state
+  // ---------------------------------------------------------------------------
+  const dragCreateRef = useRef<{
+    anchorClientX: number;
+    anchorDate: string;
+    rowId: string;
+    lane: number;
+    active: boolean;
+  } | null>(null);
+  const justDragCreatedRef  = useRef(false);
+  const dragCreateCleanupRef = useRef<(() => void) | null>(null);
+  const [dragCreatePreview, setDragCreatePreview] = useState<{
+    start: string; end: string; rowId: string; lane: number;
+  } | null>(null);
   const updateTaskRef          = useRef(updateTask);
   updateTaskRef.current        = updateTask;
   const batchUpdateTasksRef    = useRef(batchUpdateTasks);
@@ -829,6 +845,11 @@ export default function TimelineCanvas({
     };
   }, [handleDocMouseMove, handleDocMouseUp, stopAutoScrollLoop]);
 
+  // Cleanup drag-to-create if component unmounts mid-drag
+  useEffect(() => {
+    return () => { dragCreateCleanupRef.current?.(); };
+  }, []);
+
   function handleBarMouseDown(
     e: React.MouseEvent,
     task: Task,
@@ -871,10 +892,100 @@ export default function TimelineCanvas({
   }
 
   // ---------------------------------------------------------------------------
+  // Canvas mousedown — start drag-to-create tracking
+  // ---------------------------------------------------------------------------
+  const DRAG_CREATE_THRESHOLD_PX = 5;
+
+  function handleCanvasMouseDown(e: React.MouseEvent) {
+    if (e.button !== 0) return;
+    const c = containerRef.current;
+    if (!c) return;
+    const svgY = e.clientY - c.getBoundingClientRect().top + c.scrollTop;
+    if (svgY < HEADER_HEIGHT) return;
+    const hit = getLaneAtClientY(e.clientY);
+    if (!hit) return;
+
+    // Clean up any stale drag-create from a missed mouseup
+    dragCreateCleanupRef.current?.();
+
+    const anchorDate = format(
+      startOfDay(xToDate(getSvgX(e.clientX), scrollStateRef.current.viewStart, scrollStateRef.current.viewEnd, scrollStateRef.current.canvasWidth)),
+      "yyyy-MM-dd"
+    );
+    dragCreateRef.current = { anchorClientX: e.clientX, anchorDate, rowId: hit.rowId, lane: hit.lane, active: false };
+    c.style.userSelect = "none";
+    c.style.cursor = "crosshair";
+
+    function getDates(clientX: number, anchorDate: string): { start: string; end: string } {
+      const cont = containerRef.current!;
+      const cursorSvgX = clientX - cont.getBoundingClientRect().left + cont.scrollLeft;
+      const { viewStart: vs, viewEnd: ve, canvasWidth: cw } = scrollStateRef.current;
+      const cursorDay = format(startOfDay(xToDate(cursorSvgX, vs, ve, cw)), "yyyy-MM-dd");
+      if (cursorDay <= anchorDate) {
+        return { start: cursorDay, end: anchorDate };
+      }
+      return { start: anchorDate, end: cursorDay };
+    }
+
+    function hasConflict(rowId: string, start: string, end: string, lane: number): boolean {
+      const slm = subLaneMapRef.current;
+      return tasksRef.current.some(
+        t => t.rowId === rowId && (slm.get(t.id) ?? 0) === lane && start <= t.end && end >= t.start
+      );
+    }
+
+    function onMove(ev: MouseEvent) {
+      const dc = dragCreateRef.current;
+      if (!dc) return;
+      if (Math.abs(ev.clientX - dc.anchorClientX) < DRAG_CREATE_THRESHOLD_PX) return;
+      dc.active = true;
+      const { start, end } = getDates(ev.clientX, dc.anchorDate);
+      const lane = hasConflict(dc.rowId, start, end, dc.lane) ? dc.lane + 1 : dc.lane;
+      setDragCreatePreview({ start, end, rowId: dc.rowId, lane });
+    }
+
+    async function onUp(ev: MouseEvent) {
+      cleanup();
+      const dc = dragCreateRef.current;
+      dragCreateRef.current = null;
+      setDragCreatePreview(null);
+      if (!dc?.active) return; // plain click — let onClick handle it
+
+      justDragCreatedRef.current = true;
+      const { start, end } = getDates(ev.clientX, dc.anchorDate);
+      const conflict = hasConflict(dc.rowId, start, end, dc.lane);
+      const lane = conflict ? dc.lane + 1 : dc.lane;
+
+      let task: Task;
+      let insertedLane: { rowId: string; lane: number } | undefined;
+      if (conflict) {
+        // Atomically insert new lane + create task to avoid state overwrite
+        task = await insertLaneAndCreateTask(dc.rowId, lane, { title: "", rowId: dc.rowId, start, end, lane });
+        insertedLane = { rowId: dc.rowId, lane };
+      } else {
+        task = await createTask({ title: "", rowId: dc.rowId, start, end, lane });
+      }
+      setPanel({ type: "task", taskId: task.id, insertedLane });
+    }
+
+    function cleanup() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      const cont = containerRef.current;
+      if (cont) { cont.style.userSelect = ""; cont.style.cursor = ""; }
+      dragCreateCleanupRef.current = null;
+    }
+    dragCreateCleanupRef.current = cleanup;
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  // ---------------------------------------------------------------------------
   // Canvas click — create task on empty space
   // ---------------------------------------------------------------------------
   async function handleCanvasClick(e: React.MouseEvent) {
     if (justDraggedRef.current) { justDraggedRef.current = false; return; }
+    if (justDragCreatedRef.current) { justDragCreatedRef.current = false; return; }
     const c = containerRef.current;
     if (!c) return;
     const svgY = e.clientY - c.getBoundingClientRect().top + c.scrollTop;
@@ -899,6 +1010,7 @@ export default function TimelineCanvas({
       ref={containerRef}
       onScroll={handleScroll}
       onContextMenu={handleContainerContextMenu}
+      onMouseDown={handleCanvasMouseDown}
       onClick={handleCanvasClick}
       className="relative flex-1 overflow-auto bg-[var(--color-bg-base)]"
       style={{ minWidth: 0 }}
@@ -1451,6 +1563,25 @@ export default function TimelineCanvas({
           stroke="rgba(255,255,255,0.08)"
           strokeWidth={1}
         />
+
+        {/* ── Drag-to-create preview bar ──────────────────────────────────── */}
+        {dragCreatePreview && (() => {
+          const { start, end, rowId, lane } = dragCreatePreview;
+          const rowY = rowYMap.get(rowId) ?? 0;
+          const x    = dateToX(parseISO(start),           viewStart, viewEnd, canvasWidth);
+          const xEnd = dateToX(addDays(parseISO(end), 1), viewStart, viewEnd, canvasWidth);
+          const barY = rowY + lane * ROW_HEIGHT + BAR_PAD_Y;
+          return (
+            <rect
+              x={x} y={barY} width={Math.max(xEnd - x, 2)} height={BAR_HEIGHT} rx={4}
+              fill="rgba(99,102,241,0.3)"
+              stroke="rgba(99,102,241,0.7)"
+              strokeWidth={1.5}
+              strokeDasharray="5 3"
+              style={{ pointerEvents: "none" }}
+            />
+          );
+        })()}
 
       </svg>
 

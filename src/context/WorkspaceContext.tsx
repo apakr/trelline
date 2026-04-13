@@ -67,6 +67,10 @@ interface WorkspaceContextValue {
     updates: Array<{ taskId: string; changes: Partial<Omit<Task, "id" | "createdAt">> }>,
     rowUpdate?: { rowId: string; laneCount: number }
   ) => Promise<void>;
+  /** Atomically inserts a new lane (shifting tasks ≥ insertAtLane up) and creates a task. */
+  insertLaneAndCreateTask: (rowId: string, insertAtLane: number, taskInput: NewTaskInput) => Promise<Task>;
+  /** Atomically undoes a lane insertion (if any) and deletes the task in one state update. */
+  deleteLaneAndTask: (taskId: string, insertedLane?: { rowId: string; lane: number }) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
 
   // UI
@@ -403,6 +407,127 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     [workspaceState] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  const insertLaneAndCreateTask = useCallback(
+    async (rowId: string, insertAtLane: number, taskInput: NewTaskInput): Promise<Task> => {
+      const current = requireState();
+      const now = new Date().toISOString();
+
+      // Shift tasks at lanes >= insertAtLane up by 1
+      const shiftedTasks = current.tasks.map((t) => {
+        if (t.rowId !== rowId || (t.lane ?? 0) < insertAtLane) return t;
+        return { ...t, lane: (t.lane ?? 0) + 1, updatedAt: now };
+      });
+
+      // Increment laneCount for the row
+      const updatedRows = current.workspace.rows.map((r) =>
+        r.id === rowId ? { ...r, laneCount: (r.laneCount ?? 1) + 1 } : r
+      );
+
+      // Build new task
+      const row = current.workspace.rows.find((r) => r.id === rowId);
+      const rowOrders = current.tasks.filter((t) => t.rowId === rowId).map((t) => t.rowOrder);
+      const rowOrder = rowOrders.length > 0 ? Math.max(...rowOrders) + 1 : 0;
+      const end = taskInput.isMilestone ? taskInput.start : taskInput.end;
+      const task: Task = {
+        id: `task_${uuidv4()}`,
+        title: taskInput.title,
+        rowId: taskInput.rowId,
+        start: taskInput.start,
+        end,
+        status: "not_done",
+        color: taskInput.color ?? row?.color ?? DEFAULT_ROW_COLOR,
+        isMilestone: taskInput.isMilestone ?? false,
+        notes: taskInput.notes ?? "",
+        dependencies: [],
+        rowOrder,
+        lane: taskInput.lane ?? 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const next: WorkspaceState = {
+        ...current,
+        workspace: { ...current.workspace, rows: updatedRows },
+        tasks: [...shiftedTasks, task],
+      };
+      setWorkspaceState(next);
+
+      await Promise.all([
+        ...current.tasks
+          .filter((t) => t.rowId === rowId && (t.lane ?? 0) >= insertAtLane)
+          .map((orig) => {
+            const updated = shiftedTasks.find((s) => s.id === orig.id)!;
+            return saveTask(current.folderPath, updated);
+          }),
+        saveTask(current.folderPath, task),
+        saveWorkspace(current.folderPath, withScrollCenter(next.workspace)),
+      ]);
+
+      return task;
+    },
+    [workspaceState] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  /**
+   * Atomically deletes a task and, if a lane was inserted for it, undoes that
+   * insertion — all in one setWorkspaceState call to avoid stale-closure overwrites.
+   */
+  const deleteLaneAndTask = useCallback(
+    async (taskId: string, insertedLane?: { rowId: string; lane: number }) => {
+      const current = requireState();
+      const now = new Date().toISOString();
+
+      // Undo lane insertion: shift tasks at lane > insertedLane.lane back down
+      let updatedTasks = current.tasks;
+      let updatedRows = current.workspace.rows;
+      if (insertedLane) {
+        updatedTasks = updatedTasks.map((t) => {
+          if (t.rowId !== insertedLane.rowId || (t.lane ?? 0) <= insertedLane.lane) return t;
+          return { ...t, lane: (t.lane ?? 0) - 1, updatedAt: now };
+        });
+        updatedRows = updatedRows.map((r) =>
+          r.id === insertedLane.rowId
+            ? { ...r, laneCount: Math.max(1, (r.laneCount ?? 1) - 1) }
+            : r
+        );
+      }
+
+      // Remove task and clean up dependency refs
+      updatedTasks = updatedTasks
+        .filter((t) => t.id !== taskId)
+        .map((t) => ({ ...t, dependencies: t.dependencies.filter((d) => d !== taskId) }));
+
+      const next: WorkspaceState = {
+        ...current,
+        workspace: { ...current.workspace, rows: updatedRows },
+        tasks: updatedTasks,
+      };
+      setWorkspaceState(next);
+
+      const tasksWithChangedDeps = updatedTasks.filter((t) => {
+        const orig = current.tasks.find((o) => o.id === t.id);
+        return orig && orig.dependencies.length !== t.dependencies.length;
+      });
+      const shiftedTasks = insertedLane
+        ? updatedTasks.filter(
+            (t) => t.rowId === insertedLane.rowId && (t.lane ?? 0) >= insertedLane.lane
+          )
+        : [];
+
+      await Promise.all([
+        deleteTaskFile(current.folderPath, taskId),
+        ...tasksWithChangedDeps.map((t) => saveTask(current.folderPath, t)),
+        ...shiftedTasks.map((t) => saveTask(current.folderPath, t)),
+        ...(insertedLane ? [saveWorkspace(current.folderPath, withScrollCenter(next.workspace))] : []),
+      ]);
+
+      setPanel((prev) =>
+        prev.type === "task" && prev.taskId === taskId ? { type: "none" } : prev
+      );
+    },
+    [workspaceState] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const deleteTask = useCallback(async (taskId: string) => {
     const current = requireState();
 
@@ -470,6 +595,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     createTask,
     updateTask,
     batchUpdateTasks,
+    insertLaneAndCreateTask,
+    deleteLaneAndTask,
     deleteTask,
 
     setPanel,

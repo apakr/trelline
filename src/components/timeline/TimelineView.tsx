@@ -8,7 +8,7 @@ import NewTaskPanel from "./NewTaskPanel";
 import TaskDetailPanel from "./TaskDetailPanel";
 
 export default function TimelineView() {
-  const { workspace, tasks, addRow, updateRow, reorderRows, deleteRow, setScrollCenterDate, panel, setPanel } = useLoadedWorkspace();
+  const { workspace, tasks, addRow, updateRow, reorderRows, deleteRow, setScrollCenterDate, panel, setPanel, deleteLaneAndTask } = useLoadedWorkspace();
   const scrollToTodayRef = useRef<(() => void) | null>(null);
   const scrollToDateRef  = useRef<((date: Date) => void) | null>(null);
   const rowPanelBodyRef  = useRef<HTMLDivElement | null>(null);
@@ -124,14 +124,23 @@ export default function TimelineView() {
         {(panel.type === "newTask" || panel.type === "task") && (
           <div
             className="absolute inset-0 z-[9]"
-            onClick={() => setPanel({ type: "none" })}
+            onClick={() => {
+              if (panel.type === "task") {
+                const task = tasks.find((t) => t.id === panel.taskId);
+                if (task && !task.title.trim()) {
+                  deleteLaneAndTask(panel.taskId, panel.insertedLane);
+                  return; // deleteLaneAndTask closes the panel itself
+                }
+              }
+              setPanel({ type: "none" });
+            }}
           />
         )}
         {panel.type === "newTask" && (
           <NewTaskPanel defaultDate={currentCenterDateStrRef.current} />
         )}
         {panel.type === "task" && (
-          <TaskDetailPanel taskId={panel.taskId} />
+          <TaskDetailPanel taskId={panel.taskId} insertedLane={panel.insertedLane} />
         )}
       </div>
     </div>
