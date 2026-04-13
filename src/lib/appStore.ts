@@ -4,7 +4,8 @@
  */
 
 import { load } from "@tauri-apps/plugin-store";
-import type { AppConfig, RecentWorkspace } from "../types";
+import type { AppConfig, AppSettings, RecentWorkspace } from "../types";
+import { DEFAULT_SETTINGS } from "../types";
 
 const STORE_PATH = "app-config.json";
 const RECENT_MAX = 5;
@@ -16,7 +17,17 @@ async function getStore() {
 export async function loadAppConfig(): Promise<AppConfig> {
   const store = await getStore();
   const recent = await store.get<RecentWorkspace[]>("recentWorkspaces");
-  return { recentWorkspaces: recent ?? [] };
+  const settings = await store.get<AppSettings>("settings");
+  return {
+    recentWorkspaces: recent ?? [],
+    settings: settings ? { ...DEFAULT_SETTINGS, ...settings } : DEFAULT_SETTINGS,
+  };
+}
+
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  const store = await getStore();
+  await store.set("settings", settings);
+  await store.save();
 }
 
 export async function addRecentWorkspace(entry: RecentWorkspace): Promise<void> {

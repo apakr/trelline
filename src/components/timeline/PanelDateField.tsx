@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { format, parseISO, isValid, startOfDay } from "date-fns";
 import DateNavPicker from "./DateNavPicker";
+import { useWorkspace } from "../../context/WorkspaceContext";
 
 interface PanelDateFieldProps {
   label: string;
@@ -19,6 +20,8 @@ interface PanelDateFieldProps {
  * zero-height parent, so it appears exactly at that fixed position in the viewport.
  */
 export default function PanelDateField({ label, value, onChange }: PanelDateFieldProps) {
+  const { appConfig } = useWorkspace();
+  const dateFmt = appConfig.settings.dateFormat === "YYYY-DD-MM" ? "yyyy-dd-MM" : "yyyy-MM-dd";
   const [open, setOpen] = useState(false);
   const [anchorTop, setAnchorTop] = useState(0);
   const [anchorLeft, setAnchorLeft] = useState(0);
@@ -69,7 +72,7 @@ export default function PanelDateField({ label, value, onChange }: PanelDateFiel
         onClick={openPicker}
         className="rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-left text-sm text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-accent)] focus:outline-none"
       >
-        {value || "Select date"}
+        {value ? format(parseISO(value), dateFmt) : "Select date"}
       </button>
 
       {open && createPortal(
@@ -88,6 +91,7 @@ export default function PanelDateField({ label, value, onChange }: PanelDateFiel
         >
           <DateNavPicker
             initialDate={parsed}
+            displayFormat={dateFmt}
             onConfirm={(d) => {
               onChange(format(d, "yyyy-MM-dd"));
               setOpen(false);

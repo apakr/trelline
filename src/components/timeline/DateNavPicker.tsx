@@ -20,6 +20,7 @@ interface DateNavPickerProps {
   initialDate: Date;
   onConfirm: (date: Date) => void;
   onCancel: () => void;
+  displayFormat?: string; // date-fns format string, e.g. "yyyy-MM-dd" or "yyyy-dd-MM"
 }
 
 const DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -49,13 +50,13 @@ function parseUserDate(raw: string): Date | null {
   return isValid(d) && !isNaN(d.getTime()) ? startOfDay(d) : null;
 }
 
-export default function DateNavPicker({ initialDate, onConfirm, onCancel }: DateNavPickerProps) {
+export default function DateNavPicker({ initialDate, onConfirm, onCancel, displayFormat = "yyyy-MM-dd" }: DateNavPickerProps) {
   const today = startOfDay(new Date());
   const [viewMonth, setViewMonth] = useState(() => startOfMonth(initialDate));
   const [selected, setSelected]   = useState<Date>(() => startOfDay(initialDate));
 
   // Text input state — tracks the raw string the user is typing
-  const [textValue, setTextValue]   = useState(() => format(initialDate, "yyyy-MM-dd"));
+  const [textValue, setTextValue]   = useState(() => format(initialDate, displayFormat));
   const [textError,  setTextError]  = useState(false);
 
   function applyTextDate() {
@@ -81,7 +82,7 @@ export default function DateNavPicker({ initialDate, onConfirm, onCancel }: Date
   function handleDayClick(d: Date) {
     const day = startOfDay(d);
     setSelected(day);
-    setTextValue(format(day, "yyyy-MM-dd"));
+    setTextValue(format(day, displayFormat));
     setTextError(false);
   }
 
@@ -155,7 +156,7 @@ export default function DateNavPicker({ initialDate, onConfirm, onCancel }: Date
           onChange={(e) => { setTextValue(e.target.value); setTextError(false); }}
           onKeyDown={handleTextKeyDown}
           onBlur={applyTextDate}
-          placeholder="YYYY-MM-DD"
+          placeholder={displayFormat.toUpperCase()}
           className={[
             "w-full rounded border px-2 py-1 text-center text-xs focus:outline-none transition-colors",
             textError

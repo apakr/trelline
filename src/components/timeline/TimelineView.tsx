@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { format, parseISO } from "date-fns";
 import { useLoadedWorkspace } from "../../context/WorkspaceContext";
 import { computeSubLanes } from "../../lib/subLanes";
 import TopBar from "./TopBar";
@@ -8,26 +9,32 @@ import NewTaskPanel from "./NewTaskPanel";
 import TaskDetailPanel from "./TaskDetailPanel";
 
 export default function TimelineView() {
-  const { workspace, tasks, addRow, updateRow, reorderRows, deleteRow, setScrollCenterDate, panel, setPanel, deleteLaneAndTask } = useLoadedWorkspace();
+  const { workspace, tasks, addRow, updateRow, reorderRows, deleteRow, setScrollCenterDate, panel, setPanel, deleteLaneAndTask, appConfig } = useLoadedWorkspace();
+  const dateFmt = appConfig.settings.dateFormat === "YYYY-DD-MM" ? "yyyy-dd-MM" : "yyyy-MM-dd";
   const scrollToTodayRef = useRef<(() => void) | null>(null);
   const scrollToDateRef  = useRef<((date: Date) => void) | null>(null);
   const rowPanelBodyRef  = useRef<HTMLDivElement | null>(null);
   const centerDateInputRef = useRef<HTMLInputElement>(null);
 
   // Tracks the current canvas center date string in real time (updated on every scroll).
-  // Read at panel-open time to give NewTaskPanel an accurate default start date.
+  // Always ISO ("yyyy-MM-dd") — used as default start date for NewTaskPanel.
   const currentCenterDateStrRef = useRef<string>(workspace.scrollCenterDate ?? "");
 
   // Captured once on mount — stable prop that won't re-trigger canvas effects
   const initialScrollCenterDate = useRef(workspace.scrollCenterDate);
 
-  // Update the input display and center date ref directly (no React state → no re-renders)
+  // Update the input display and center date ref directly (no React state → no re-renders).
+  // dateStr is always ISO "yyyy-MM-dd"; display is formatted per user's dateFormat setting.
   const handleCenterDateLive = useCallback((dateStr: string) => {
     currentCenterDateStrRef.current = dateStr;
     if (centerDateInputRef.current) {
-      centerDateInputRef.current.value = dateStr;
+      try {
+        centerDateInputRef.current.value = format(parseISO(dateStr), dateFmt);
+      } catch {
+        centerDateInputRef.current.value = dateStr;
+      }
     }
-  }, []);
+  }, [dateFmt]);
 
   const sortedRows = useMemo(
     () => [...workspace.rows].sort((a, b) => a.order - b.order),
@@ -73,6 +80,7 @@ export default function TimelineView() {
       <TopBar
         onScrollToToday={() => scrollToTodayRef.current?.()}
         centerDateInputRef={centerDateInputRef}
+        centerDateISORef={currentCenterDateStrRef}
         onNavigateToDate={(date) => scrollToDateRef.current?.(date)}
       />
 

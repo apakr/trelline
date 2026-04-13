@@ -4,7 +4,7 @@ import {
   addWeeks,
   addMonths,
   subDays,
-  startOfISOWeek,
+  startOfWeek,
   startOfMonth,
   getDaysInMonth,
   differenceInDays,
@@ -12,7 +12,7 @@ import {
   isAfter,
   format,
   getDay,
-  getISOWeek,
+  getWeek,
   parseISO,
   startOfDay,
 } from "date-fns";
@@ -51,7 +51,8 @@ function buildColumns(
   canvasWidth: number,
   zoom: ZoomLevel,
   renderStart: Date,
-  renderEnd: Date
+  renderEnd: Date,
+  weekStartsOn: 0 | 1 | 6 = 1
 ): Column[] {
   const cols: Column[] = [];
   const px = pxPerDay(zoom);
@@ -66,10 +67,10 @@ function buildColumns(
       d = addDays(d, 1);
     }
   } else if (zoom === "weeks") {
-    // Start from the ISO week that contains max(viewStart, renderStart)
+    // Start from the week that contains max(viewStart, renderStart)
     const anchor = isBefore(viewStart, renderStart) ? renderStart : viewStart;
-    let d = startOfISOWeek(anchor);
-    if (isBefore(d, viewStart)) d = startOfISOWeek(viewStart);
+    let d = startOfWeek(anchor, { weekStartsOn });
+    if (isBefore(d, viewStart)) d = startOfWeek(viewStart, { weekStartsOn });
 
     let prevMonth = d.getMonth() - 1; // force first column to check for month start
     const seenMonths = new Set<number>();
@@ -138,7 +139,9 @@ export default function TimelineCanvas({
   onRegisterScrollToDate,
   onVerticalScroll,
 }: TimelineCanvasProps) {
-  const { setPanel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask } = useLoadedWorkspace();
+  const { setPanel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask, appConfig } = useLoadedWorkspace();
+  const settings = appConfig.settings;
+  const weekStartsOn: 0 | 1 | 6 = settings.weekStartDay === "saturday" ? 6 : settings.weekStartDay === "sunday" ? 0 : 1;
   const today = startOfDay(new Date());
 
   // Capture scrollCenterDate at mount only — never changes after that
@@ -178,8 +181,8 @@ export default function TimelineCanvas({
 
   // --- columns (filtered to render window) ---
   const columns = useMemo(
-    () => buildColumns(viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd),
-    [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd]
+    () => buildColumns(viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd, weekStartsOn),
+    [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd, weekStartsOn]
   );
 
   // --- week start positions for months zoom header (filtered to render window) ---
@@ -187,14 +190,14 @@ export default function TimelineCanvas({
     if (zoom !== "months") return [];
     const result: Array<{ date: Date; x: number }> = [];
     const anchor = isBefore(viewStart, renderStart) ? renderStart : viewStart;
-    let d = startOfISOWeek(anchor);
-    if (isBefore(d, viewStart)) d = startOfISOWeek(viewStart);
+    let d = startOfWeek(anchor, { weekStartsOn });
+    if (isBefore(d, viewStart)) d = startOfWeek(viewStart, { weekStartsOn });
     while (isBefore(d, viewEnd) && !isAfter(d, addDays(renderEnd, 7))) {
       result.push({ date: d, x: dateToX(d, viewStart, viewEnd, canvasWidth) });
       d = addWeeks(d, 1);
     }
     return result;
-  }, [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd]);
+  }, [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd, weekStartsOn]);
 
   // --- month start positions for weeks zoom (filtered to render window) ---
   const weekZoomMonthStarts = useMemo(() => {
@@ -254,6 +257,20 @@ export default function TimelineCanvas({
   // Keep a ref with current values so the rAF callback never reads stale closures
   const scrollStateRef = useRef({ viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd });
   scrollStateRef.current = { viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd };
+
+  // Invert scroll: when enabled, route vertical wheel delta to horizontal scroll
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !settings.invertScroll) return;
+    function onWheel(e: WheelEvent) {
+      if (e.deltaY !== 0 && e.deltaX === 0) {
+        e.preventDefault();
+        el!.scrollLeft += e.deltaY;
+      }
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [settings.invertScroll]);
 
   // Stable refs so drag callbacks never read stale closures
   const sortedRowsRef = useRef(sortedRows);
@@ -1664,7 +1681,7 @@ export default function TimelineCanvas({
         {/* ── Header column borders ────────────────────────────────────── */}
         {zoom === "days" && columns.map((col) => {
           const isMonthBoundary = col.date.getDate() === 1;
-          const isWeekBoundary = getDay(col.date) === 1;
+          const isWeekBoundary = getDay(col.date) === weekStartsOn;
           if (!isMonthBoundary && !isWeekBoundary) return null;
           return (
             <line
@@ -1722,9 +1739,9 @@ export default function TimelineCanvas({
             })}
             <line x1={0} y1={18} x2={canvasWidth} y2={18} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
 
-            {/* Row 2: Week numbers — only on Mondays */}
+            {/* Row 2: Week numbers — only on the week start day */}
             {columns.map((col) => {
-              if (getDay(col.date) !== 1) return null;
+              if (getDay(col.date) !== weekStartsOn) return null;
               return (
                 <text
                   key={`wk-${col.key}`}
@@ -1734,7 +1751,7 @@ export default function TimelineCanvas({
                   textAnchor="start"
                   style={{ userSelect: "none" }}
                 >
-                  {`W${getISOWeek(col.date)}`}
+                  {`W${getWeek(col.date, { weekStartsOn })}`}
                 </text>
               );
             })}
@@ -1781,7 +1798,7 @@ export default function TimelineCanvas({
                   textAnchor="start"
                   style={{ userSelect: "none" }}
                 >
-                  {`W${getISOWeek(col.date)}`}
+                  {`W${getWeek(col.date, { weekStartsOn })}`}
                 </text>
                 <text
                   x={col.x + col.width / 2} y={42}
@@ -1843,7 +1860,7 @@ export default function TimelineCanvas({
                 textAnchor="start"
                 style={{ userSelect: "none" }}
               >
-                {`W${getISOWeek(ws.date)}`}
+                {`W${getWeek(ws.date, { weekStartsOn })}`}
               </text>
             ))}
           </>

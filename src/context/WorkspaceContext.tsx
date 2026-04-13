@@ -8,6 +8,7 @@ import React, {
 import { v4 as uuidv4 } from "uuid";
 import type {
   AppConfig,
+  AppSettings,
   PanelState,
   Row,
   Task,
@@ -15,6 +16,7 @@ import type {
   WorkspaceState,
   ZoomLevel,
 } from "../types";
+import { DEFAULT_SETTINGS } from "../types";
 import {
   openWorkspace,
   createWorkspace as fsCreateWorkspace,
@@ -26,6 +28,7 @@ import {
   loadAppConfig,
   addRecentWorkspace,
   removeRecentWorkspace,
+  saveSettings,
 } from "../lib/appStore";
 
 const DEFAULT_ROW_COLOR = "#6366f1";
@@ -53,6 +56,7 @@ interface WorkspaceContextValue {
   // Recent workspaces
   refreshAppConfig: () => Promise<void>;
   forgetRecentWorkspace: (folderPath: string) => Promise<void>;
+  updateSettings: (settings: AppSettings) => Promise<void>;
 
   // Rows
   addRow: (name: string) => Promise<Row>;
@@ -97,7 +101,7 @@ const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState | null>(null);
-  const [appConfig, setAppConfig] = useState<AppConfig>({ recentWorkspaces: [] });
+  const [appConfig, setAppConfig] = useState<AppConfig>({ recentWorkspaces: [], settings: DEFAULT_SETTINGS });
   const [panel, setPanel] = useState<PanelState>({ type: "none" });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -221,6 +225,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     await removeRecentWorkspace(folderPath);
     await refreshAppConfig();
   }, [refreshAppConfig]);
+
+  const updateSettings = useCallback(async (settings: AppSettings) => {
+    await saveSettings(settings);
+    setAppConfig((prev) => ({ ...prev, settings }));
+  }, []);
 
   // -------------------------------------------------------------------------
   // Rows
@@ -586,6 +595,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
     refreshAppConfig,
     forgetRecentWorkspace,
+    updateSettings,
 
     addRow,
     updateRow,

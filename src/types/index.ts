@@ -66,8 +66,21 @@ export interface RecentWorkspace {
   lastOpened: string; // ISO 8601
 }
 
+export interface AppSettings {
+  invertScroll: boolean;
+  dateFormat: "YYYY-MM-DD" | "YYYY-DD-MM";
+  weekStartDay: "monday" | "saturday" | "sunday";
+}
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  invertScroll: false,
+  dateFormat: "YYYY-MM-DD",
+  weekStartDay: "monday",
+};
+
 export interface AppConfig {
   recentWorkspaces: RecentWorkspace[]; // most recent first, capped at 5
+  settings: AppSettings;
 }
 
 // ---------------------------------------------------------------------------
