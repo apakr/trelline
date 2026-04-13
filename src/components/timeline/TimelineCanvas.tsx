@@ -20,6 +20,7 @@ import type { Row, Task, ZoomLevel } from "../../types";
 import { computeEffectiveStatus } from "../../types";
 import { useLoadedWorkspace } from "../../context/WorkspaceContext";
 import { dateToX, xToDate, getInitialBounds, pxPerDay } from "../../lib/dateToX";
+import { computeArrowPath, arrowMidpoint, wouldCreateCycle, ARROWHEAD_LEN } from "../../lib/depArrows";
 
 // ---------------------------------------------------------------------------
 // Layout constants — must match RowPanel.tsx
@@ -338,6 +339,35 @@ export default function TimelineCanvas({
   rowYMapRef.current   = rowYMap;
 
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // Dependency drag state
+  // ---------------------------------------------------------------------------
+  const depDragRef = useRef<{
+    sourceTaskId: string;
+    dotSide: "right" | "left"; // "right" = source is predecessor, "left" = source is successor
+  } | null>(null);
+  const depDragSnapTargetRef = useRef<string | null>(null);
+  const [isDepDragging, setIsDepDragging] = useState(false);
+  const [depDragPreview, setDepDragPreview] = useState<{
+    x2: number; y2: number;
+    snapTargetId: string | null;
+  } | null>(null);
+
+  // Arrow hover + context menu
+  const [hoveredArrowKey, setHoveredArrowKey] = useState<string | null>(null);
+  const [arrowMenu, setArrowMenu] = useState<{
+    x: number; y: number;
+    predId: string; succId: string;
+  } | null>(null);
+
+  // Close arrow menu on outside click
+  useEffect(() => {
+    if (!arrowMenu) return;
+    function handleOutside() { setArrowMenu(null); }
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [arrowMenu]);
 
   // ---------------------------------------------------------------------------
   // Lane context menu (right-click)
@@ -1003,6 +1033,114 @@ export default function TimelineCanvas({
   }
 
   // ---------------------------------------------------------------------------
+  // Dependency helpers
+  // ---------------------------------------------------------------------------
+
+  async function handleDeleteDep(predId: string, succId: string) {
+    const allTasks = tasksRef.current;
+    const succTask = allTasks.find((t) => t.id === succId);
+    if (!succTask) return;
+    await updateTaskRef.current(succId, {
+      dependencies: succTask.dependencies.filter((d) => d !== predId),
+    });
+    setHoveredArrowKey(null);
+    setArrowMenu(null);
+  }
+
+  function handleDepDotMouseDown(
+    e: React.MouseEvent,
+    task: Task,
+    dotSide: "right" | "left"
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (depDragRef.current) return;
+
+    depDragRef.current = { sourceTaskId: task.id, dotSide };
+    depDragSnapTargetRef.current = null;
+    setIsDepDragging(true);
+
+    function onMove(ev: MouseEvent) {
+      const c = containerRef.current;
+      if (!c) return;
+      const rect = c.getBoundingClientRect();
+      const svgX = ev.clientX - rect.left + c.scrollLeft;
+      const svgY = ev.clientY - rect.top + c.scrollTop;
+
+      const { viewStart: vs, viewEnd: ve, canvasWidth: cw } = scrollStateRef.current;
+      const SNAP_PX = 10; // fixed pixel tolerance around the target edge
+      const allTasks = tasksRef.current;
+      const dd = depDragRef.current!;
+
+      let snapTargetId: string | null = null;
+      for (const t of allTasks) {
+        if (t.id === dd.sourceTaskId) continue;
+        const rowY = rowYMapRef.current.get(t.rowId);
+        if (rowY === undefined) continue;
+        // Check cursor is within the specific task bar's lane (not the whole row band).
+        // Using ROW_HEIGHT/2 = 24px from the bar's center Y so moving to an adjacent
+        // lane or row immediately unsnaps.
+        const taskSubLane = subLaneMapRef.current.get(t.id) ?? 0;
+        const taskBarCenterY = rowY + taskSubLane * ROW_HEIGHT + BAR_PAD_Y + BAR_HEIGHT / 2;
+        if (Math.abs(svgY - taskBarCenterY) > ROW_HEIGHT / 2) continue;
+
+        // Target edge: left when source is pred (dragging from right dot),
+        //              right when source is succ (dragging from left dot).
+        const edgeX =
+          dd.dotSide === "right"
+            ? dateToX(parseISO(t.start), vs, ve, cw)
+            : dateToX(addDays(parseISO(t.end), 1), vs, ve, cw);
+
+        if (Math.abs(svgX - edgeX) > SNAP_PX) continue;
+
+        const predId = dd.dotSide === "right" ? dd.sourceTaskId : t.id;
+        const succId = dd.dotSide === "right" ? t.id : dd.sourceTaskId;
+        const succTask = allTasks.find((tt) => tt.id === succId);
+        if (!succTask) continue;
+        if (succTask.dependencies.includes(predId)) continue;
+        if (wouldCreateCycle(allTasks, predId, succId)) continue;
+
+        snapTargetId = t.id;
+        break;
+      }
+
+      depDragSnapTargetRef.current = snapTargetId;
+      setDepDragPreview({ x2: svgX, y2: svgY, snapTargetId });
+    }
+
+    async function onUp(_ev: MouseEvent) {
+      const snapTargetId = depDragSnapTargetRef.current;
+      const dd = depDragRef.current;
+      cleanup();
+      if (!dd || !snapTargetId) return;
+
+      const predId = dd.dotSide === "right" ? dd.sourceTaskId : snapTargetId;
+      const succId = dd.dotSide === "right" ? snapTargetId : dd.sourceTaskId;
+      const allTasks = tasksRef.current;
+      const succTask = allTasks.find((t) => t.id === succId);
+      if (!succTask) return;
+      if (succTask.dependencies.includes(predId)) return;
+      if (wouldCreateCycle(allTasks, predId, succId)) return;
+
+      await updateTaskRef.current(succId, {
+        dependencies: [...succTask.dependencies, predId],
+      });
+    }
+
+    function cleanup() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      depDragRef.current = null;
+      depDragSnapTargetRef.current = null;
+      setIsDepDragging(false);
+      setDepDragPreview(null);
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
   return (
@@ -1151,6 +1289,105 @@ export default function TimelineCanvas({
           />
         )}
 
+        {/* ── Dependency arrows (below task bars) ──────────────────────── */}
+        {tasks.flatMap((succTask) =>
+          succTask.dependencies.map((predId) => {
+            const predTask = tasks.find((t) => t.id === predId);
+            if (!predTask) return null;
+
+            // Use dragOverride for whichever endpoint is currently being dragged
+            const predDrag = dragOverride?.taskId === predTask.id ? dragOverride : null;
+            const succDrag = dragOverride?.taskId === succTask.id ? dragOverride : null;
+
+            const predEffEnd   = predDrag ? predDrag.end   : predTask.end;
+            const predEffRowId = predDrag ? predDrag.rowId : predTask.rowId;
+            const predEffLane  = predDrag ? predDrag.previewLane : (subLaneMap.get(predTask.id) ?? 0);
+
+            const succEffStart = succDrag ? succDrag.start : succTask.start;
+            const succEffRowId = succDrag ? succDrag.rowId : succTask.rowId;
+            const succEffLane  = succDrag ? succDrag.previewLane : (subLaneMap.get(succTask.id) ?? 0);
+
+            const predRowY = rowYMap.get(predEffRowId);
+            const succRowY = rowYMap.get(succEffRowId);
+            if (predRowY === undefined || succRowY === undefined) return null;
+
+            const x1 = dateToX(addDays(parseISO(predEffEnd), 1), viewStart, viewEnd, canvasWidth);
+            const y1 = predRowY + predEffLane * ROW_HEIGHT + BAR_PAD_Y + BAR_HEIGHT / 2;
+            const x2 = dateToX(parseISO(succEffStart), viewStart, viewEnd, canvasWidth);
+            const y2 = succRowY + succEffLane * ROW_HEIGHT + BAR_PAD_Y + BAR_HEIGHT / 2;
+
+            const arrowKey = `${predId}->${succTask.id}`;
+            const isHovered = hoveredArrowKey === arrowKey;
+            const AH = ARROWHEAD_LEN;
+
+            // Path ends at x2-AH (arrowhead base) so the triangle caps it cleanly
+            const d   = computeArrowPath(x1, y1, x2 - AH, y2);
+            const mid = arrowMidpoint(x1, y1, x2, y2);
+            const arrowColor = isHovered ? "var(--color-accent)" : "rgba(255,255,255,0.4)";
+
+            return (
+              <g key={arrowKey}>
+                {/* Wide invisible hit strip for hover / context menu */}
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth={14}
+                  style={{ cursor: "pointer" }}
+                  onMouseEnter={() => setHoveredArrowKey(arrowKey)}
+                  onMouseLeave={() => setHoveredArrowKey(null)}
+                  onClick={(e) => e.stopPropagation()}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setArrowMenu({ x: e.clientX, y: e.clientY, predId, succId: succTask.id });
+                  }}
+                />
+                {/* Visible arrow line */}
+                <path
+                  d={d}
+                  fill="none"
+                  stroke={arrowColor}
+                  strokeWidth={isHovered ? 2 : 1.5}
+                  style={{ pointerEvents: "none" }}
+                />
+                {/* Arrowhead (always points right into successor's left edge) */}
+                <polygon
+                  points={`${x2},${y2} ${x2 - AH},${y2 - AH / 2} ${x2 - AH},${y2 + AH / 2}`}
+                  fill={arrowColor}
+                  style={{ pointerEvents: "none" }}
+                />
+                {/* × button at midpoint when hovered */}
+                {isHovered && (
+                  <g
+                    style={{ cursor: "pointer" }}
+                    onMouseEnter={() => setHoveredArrowKey(arrowKey)}
+                    onMouseLeave={() => setHoveredArrowKey(null)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteDep(predId, succTask.id);
+                    }}
+                  >
+                    <circle
+                      cx={mid.x} cy={mid.y} r={9}
+                      fill="var(--color-bg-elevated)"
+                      stroke="rgba(255,255,255,0.2)"
+                      strokeWidth={1}
+                    />
+                    <path
+                      d={`M ${mid.x - 3} ${mid.y - 3} L ${mid.x + 3} ${mid.y + 3} M ${mid.x + 3} ${mid.y - 3} L ${mid.x - 3} ${mid.y + 3}`}
+                      stroke="rgba(255,255,255,0.65)"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      style={{ pointerEvents: "none" }}
+                    />
+                  </g>
+                )}
+              </g>
+            );
+          })
+        )}
+
         {/* ── Task bars ────────────────────────────────────────────────── */}
         {tasks.map((task) => {
           // Use drag-override row/dates when this task is being dragged
@@ -1246,6 +1483,36 @@ export default function TimelineCanvas({
                     {displayLabel}
                   </text>
                 )}
+                {/* Dep connector dots on milestone diamonds */}
+                {isHovered && !isDepDragging && (
+                  <>
+                    <circle
+                      cx={cx + r} cy={barCenterY} r={5}
+                      fill="var(--color-bg-surface)"
+                      stroke="rgba(255,255,255,0.7)"
+                      strokeWidth={1.5}
+                      style={{ cursor: "crosshair" }}
+                      onMouseDown={(e) => handleDepDotMouseDown(e, task, "right")}
+                    />
+                    <circle
+                      cx={cx - r} cy={barCenterY} r={5}
+                      fill="var(--color-bg-surface)"
+                      stroke="rgba(255,255,255,0.7)"
+                      strokeWidth={1.5}
+                      style={{ cursor: "crosshair" }}
+                      onMouseDown={(e) => handleDepDotMouseDown(e, task, "left")}
+                    />
+                  </>
+                )}
+                {isDepDragging && depDragPreview?.snapTargetId === task.id && (
+                  <polygon
+                    points={`${cx},${barCenterY - r - 3} ${cx + r + 3},${barCenterY} ${cx},${barCenterY + r + 3} ${cx - r - 3},${barCenterY}`}
+                    fill="none"
+                    stroke="var(--color-accent)"
+                    strokeWidth={2}
+                    style={{ pointerEvents: "none" }}
+                  />
+                )}
               </g>
             );
           }
@@ -1316,6 +1583,37 @@ export default function TimelineCanvas({
                     onMouseDown={(e) => { e.stopPropagation(); handleBarMouseDown(e, task, "resizeRight"); }}
                   />
                 </>
+              )}
+              {/* Dep connector dots — shown when hovered and no dep drag in progress */}
+              {isHovered && !isDepDragging && (
+                <>
+                  <circle
+                    cx={x + w} cy={barCenterY} r={5}
+                    fill="var(--color-bg-surface)"
+                    stroke="rgba(255,255,255,0.7)"
+                    strokeWidth={1.5}
+                    style={{ cursor: "crosshair" }}
+                    onMouseDown={(e) => handleDepDotMouseDown(e, task, "right")}
+                  />
+                  <circle
+                    cx={x} cy={barCenterY} r={5}
+                    fill="var(--color-bg-surface)"
+                    stroke="rgba(255,255,255,0.7)"
+                    strokeWidth={1.5}
+                    style={{ cursor: "crosshair" }}
+                    onMouseDown={(e) => handleDepDotMouseDown(e, task, "left")}
+                  />
+                </>
+              )}
+              {/* Snap highlight ring shown on potential drop target during dep drag */}
+              {isDepDragging && depDragPreview?.snapTargetId === task.id && (
+                <rect
+                  x={x - 2} y={barY - 2} width={w + 4} height={BAR_HEIGHT + 4} rx={5}
+                  fill="none"
+                  stroke="var(--color-accent)"
+                  strokeWidth={2}
+                  style={{ pointerEvents: "none" }}
+                />
               )}
             </g>
           );
@@ -1564,6 +1862,56 @@ export default function TimelineCanvas({
           strokeWidth={1}
         />
 
+        {/* ── Dep drag preview arrow ─────────────────────────────────────── */}
+        {depDragPreview && depDragRef.current && (() => {
+          const dd = depDragRef.current!;
+          const sourceTask = tasks.find((t) => t.id === dd.sourceTaskId);
+          if (!sourceTask) return null;
+
+          const sourceSubLane = subLaneMap.get(sourceTask.id) ?? 0;
+          const sourceRowY = rowYMap.get(sourceTask.rowId) ?? 0;
+          const srcCenterY = sourceRowY + sourceSubLane * ROW_HEIGHT + BAR_PAD_Y + BAR_HEIGHT / 2;
+          const srcX =
+            dd.dotSide === "right"
+              ? dateToX(addDays(parseISO(sourceTask.end), 1), viewStart, viewEnd, canvasWidth)
+              : dateToX(parseISO(sourceTask.start), viewStart, viewEnd, canvasWidth);
+
+          let endX = depDragPreview.x2;
+          let endY = depDragPreview.y2;
+
+          const snap = depDragPreview.snapTargetId
+            ? tasks.find((t) => t.id === depDragPreview.snapTargetId)
+            : null;
+          if (snap) {
+            const snapSubLane = subLaneMap.get(snap.id) ?? 0;
+            const snapRowY = rowYMap.get(snap.rowId) ?? 0;
+            endY = snapRowY + snapSubLane * ROW_HEIGHT + BAR_PAD_Y + BAR_HEIGHT / 2;
+            endX =
+              dd.dotSide === "right"
+                ? dateToX(parseISO(snap.start), viewStart, viewEnd, canvasWidth)
+                : dateToX(addDays(parseISO(snap.end), 1), viewStart, viewEnd, canvasWidth);
+          }
+
+          const AH = ARROWHEAD_LEN;
+          const previewPath = computeArrowPath(srcX, srcCenterY, endX - AH, endY);
+
+          return (
+            <g style={{ pointerEvents: "none" }}>
+              <path
+                d={previewPath}
+                fill="none"
+                stroke="var(--color-accent)"
+                strokeWidth={2}
+                strokeDasharray="5 3"
+              />
+              <polygon
+                points={`${endX},${endY} ${endX - AH},${endY - AH / 2} ${endX - AH},${endY + AH / 2}`}
+                fill="var(--color-accent)"
+              />
+            </g>
+          );
+        })()}
+
         {/* ── Drag-to-create preview bar ──────────────────────────────────── */}
         {dragCreatePreview && (() => {
           const { start, end, rowId, lane } = dragCreatePreview;
@@ -1661,6 +2009,35 @@ export default function TimelineCanvas({
           </div>
         );
       })()}
+      {/* ── Arrow context menu ──────────────────────────────────────────────── */}
+      {arrowMenu && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed",
+            left: Math.min(arrowMenu.x, window.innerWidth - 180),
+            top: arrowMenu.y + 4,
+            zIndex: 999,
+            width: 176,
+          }}
+          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-1 shadow-xl"
+        >
+          <div className="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+            Dependency
+          </div>
+          <div className="mx-2 mb-1 border-t border-[var(--color-border)]" />
+          <button
+            onClick={() => handleDeleteDep(arrowMenu.predId, arrowMenu.succId)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-400 hover:bg-red-500/10"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M2 4h8M4.5 4V3h3v1M5 6v3M7 6v3M3 4l.5 5.5h5L9 4" />
+            </svg>
+            Delete dependency
+          </button>
+        </div>
+      )}
     </div>
   );
 }
