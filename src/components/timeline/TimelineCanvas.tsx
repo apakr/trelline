@@ -1464,6 +1464,7 @@ export default function TimelineCanvas({
         return (
           <div
             onMouseDown={(e) => e.stopPropagation()} // don't close on click inside
+            onClick={(e) => e.stopPropagation()} // don't trigger canvas click-to-create
             style={{ position: "fixed", left, top, zIndex: 999, width: menuW }}
             className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-1 shadow-xl"
           >
