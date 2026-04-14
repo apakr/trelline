@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format, parseISO } from "date-fns";
 import { useLoadedWorkspace } from "../../context/WorkspaceContext";
 import { computeSubLanes } from "../../lib/subLanes";
@@ -15,6 +15,7 @@ export default function TimelineView() {
   const scrollToDateRef  = useRef<((date: Date) => void) | null>(null);
   const rowPanelBodyRef  = useRef<HTMLDivElement | null>(null);
   const centerDateInputRef = useRef<HTMLInputElement>(null);
+  const [searchHighlightTaskId, setSearchHighlightTaskId] = useState<string | null>(null);
 
   // Tracks the current canvas center date string in real time (updated on every scroll).
   // Always ISO ("yyyy-MM-dd") — used as default start date for NewTaskPanel.
@@ -82,6 +83,16 @@ export default function TimelineView() {
         centerDateInputRef={centerDateInputRef}
         centerDateISORef={currentCenterDateStrRef}
         onNavigateToDate={(date) => scrollToDateRef.current?.(date)}
+        onSearchPreview={(date) => { if (date) scrollToDateRef.current?.(date); }}
+        onSearchConfirm={(taskId, date) => {
+          setSearchHighlightTaskId(taskId);
+          scrollToDateRef.current?.(date);
+        }}
+        onSearchCancel={(anchorDate) => {
+          setSearchHighlightTaskId(null);
+          scrollToDateRef.current?.(anchorDate);
+        }}
+        onSearchClear={() => setSearchHighlightTaskId(null)}
       />
 
       <div className="relative flex flex-1 overflow-hidden">
@@ -118,6 +129,8 @@ export default function TimelineView() {
           subLaneMap={subLaneMap}
           rowLaneCount={rowLaneCount}
           zoom={workspace.zoom}
+          canvasScale={workspace.canvasScale ?? 1}
+          searchHighlightTaskId={searchHighlightTaskId}
           scrollCenterDate={initialScrollCenterDate.current}
           onScrollCenterDateChange={setScrollCenterDate}
           onCenterDateLive={handleCenterDateLive}

@@ -19,8 +19,8 @@ const PX_PER_DAY_MAP: Record<ZoomLevel, number> = {
   months: 8,   // ~240px / month
 };
 
-export function pxPerDay(zoom: ZoomLevel): number {
-  return PX_PER_DAY_MAP[zoom];
+export function pxPerDay(zoom: ZoomLevel, scale = 1): number {
+  return PX_PER_DAY_MAP[zoom] * scale;
 }
 
 // ---------------------------------------------------------------------------

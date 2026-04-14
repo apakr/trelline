@@ -6,9 +6,11 @@
       "id": "row_bd5016ca-f2bd-4c0a-9334-d9282f480cd0",
       "name": "Row 1",
       "order": 0,
-      "color": "#6366f1"
+      "color": "#6366f1",
+      "laneCount": 1
     }
   ],
   "zoom": "weeks",
-  "lastOpened": "2026-04-10T04:49:36.656Z"
+  "lastOpened": "2026-04-13T23:17:39.584Z",
+  "scrollCenterDate": "2026-04-11"
 }

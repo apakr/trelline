@@ -56,6 +56,7 @@ interface WorkspaceContextValue {
   closeWorkspace: () => void;
   renameWorkspace: (name: string) => Promise<void>;
   setZoom: (zoom: ZoomLevel) => Promise<void>;
+  setCanvasScale: (scale: number) => Promise<void>;
   setScrollCenterDate: (date: string) => Promise<void>;
 
   // Recent workspaces
@@ -324,6 +325,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const setZoom = useCallback(async (zoom: ZoomLevel) => {
     const current = requireState();
     const updated = updateWorkspaceInState({ zoom });
+    await saveWorkspace(current.folderPath, withScrollCenter(updated.workspace));
+  }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setCanvasScale = useCallback(async (scale: number) => {
+    const current = requireState();
+    const updated = updateWorkspaceInState({ canvasScale: scale });
     await saveWorkspace(current.folderPath, withScrollCenter(updated.workspace));
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -706,6 +713,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     closeWorkspace,
     renameWorkspace,
     setZoom,
+    setCanvasScale,
     setScrollCenterDate,
 
     refreshAppConfig,

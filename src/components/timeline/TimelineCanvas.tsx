@@ -52,10 +52,11 @@ function buildColumns(
   zoom: ZoomLevel,
   renderStart: Date,
   renderEnd: Date,
-  weekStartsOn: 0 | 1 | 6 = 1
+  weekStartsOn: 0 | 1 | 6 = 1,
+  scale = 1
 ): Column[] {
   const cols: Column[] = [];
-  const px = pxPerDay(zoom);
+  const px = pxPerDay(zoom, scale);
 
   if (zoom === "days") {
     // Start from the later of viewStart and renderStart
@@ -118,6 +119,8 @@ export interface TimelineCanvasProps {
   subLaneMap: Map<string, number>;
   rowLaneCount: Map<string, number>;
   zoom: ZoomLevel;
+  canvasScale?: number;                                // scale multiplier for pxPerDay (1.0 = 100%)
+  searchHighlightTaskId?: string | null;               // task to highlight with marching ants (search confirm)
   scrollCenterDate?: string;                            // from workspace, used only on mount
   onScrollCenterDateChange?: (date: string) => void;   // debounced, saves to disk
   onCenterDateLive?: (dateStr: string) => void;        // fires on every scroll, updates display
@@ -132,6 +135,8 @@ export default function TimelineCanvas({
   subLaneMap,
   rowLaneCount,
   zoom,
+  canvasScale = 1,
+  searchHighlightTaskId = null,
   scrollCenterDate,
   onScrollCenterDateChange,
   onCenterDateLive,
@@ -169,7 +174,7 @@ export default function TimelineCanvas({
 
   // canvasWidth derived from state
   const totalDays   = differenceInDays(viewEnd, viewStart);
-  const canvasWidth = totalDays * pxPerDay(zoom);
+  const canvasWidth = totalDays * pxPerDay(zoom, canvasScale);
 
   // --- render window: only elements within this range exist in the DOM ---
   const BUFFER_DAYS = 180;
@@ -181,8 +186,8 @@ export default function TimelineCanvas({
 
   // --- columns (filtered to render window) ---
   const columns = useMemo(
-    () => buildColumns(viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd, weekStartsOn),
-    [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd, weekStartsOn]
+    () => buildColumns(viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd, weekStartsOn, canvasScale),
+    [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd, weekStartsOn, canvasScale]
   );
 
   // --- week start positions for months zoom header (filtered to render window) ---
@@ -214,7 +219,7 @@ export default function TimelineCanvas({
   }, [viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd]);
 
   // --- today line ---
-  const todayX = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom) / 2;
+  const todayX = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom, canvasScale) / 2;
   const todayVisible = todayX >= 0 && todayX <= canvasWidth;
 
   // --- row Y positions (variable height — depends on sub-lane count) ---
@@ -247,6 +252,8 @@ export default function TimelineCanvas({
   const rafRef                = useRef<number | null>(null);
   const saveCenterTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevZoomRef           = useRef(zoom);
+  const prevScaleRef          = useRef(canvasScale);
+  const prevCanvasWidthRef    = useRef(canvasWidth);
 
   // Tracks the current viewport center date in real time.
   // Updated on every scroll, after scrollToToday, and after mount scroll.
@@ -255,8 +262,8 @@ export default function TimelineCanvas({
   const currentCenterDateRef = useRef<Date>(initialCenter);
 
   // Keep a ref with current values so the rAF callback never reads stale closures
-  const scrollStateRef = useRef({ viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd });
-  scrollStateRef.current = { viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd };
+  const scrollStateRef = useRef({ viewStart, viewEnd, canvasWidth, zoom, canvasScale, renderStart, renderEnd });
+  scrollStateRef.current = { viewStart, viewEnd, canvasWidth, zoom, canvasScale, renderStart, renderEnd };
 
   // Invert scroll: when enabled, route vertical wheel delta to horizontal scroll
   useEffect(() => {
@@ -679,20 +686,26 @@ export default function TimelineCanvas({
   }, [viewStart, viewEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
-  // Zoom transition — preserve viewport center date when zoom changes.
-  // Uses currentCenterDateRef (updated continuously) instead of reading
-  // c.scrollLeft, which the browser clamps before this effect ever fires.
+  // Zoom / scale transition — preserve viewport center date when zoom or scale changes.
+  // Reads c.scrollLeft + prevCanvasWidthRef to compute the center date precisely,
+  // avoiding stale-ref drift during rapid ctrl+scroll scale changes.
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const c = containerRef.current;
     if (!c) return;
-    if (prevZoomRef.current !== zoom) {
-      const centerDate = currentCenterDateRef.current;
+    if (prevZoomRef.current !== zoom || prevScaleRef.current !== canvasScale) {
+      // Derive center date from the actual current scroll position and the
+      // PREVIOUS canvas width (before this render changed the scale/zoom).
+      const prevCW = prevCanvasWidthRef.current;
+      const centerX = c.scrollLeft + c.clientWidth / 2;
+      const centerDate = xToDate(centerX, viewStart, viewEnd, prevCW);
       const newCenterX = dateToX(centerDate, viewStart, viewEnd, canvasWidth);
       c.scrollLeft = Math.max(0, newCenterX - c.clientWidth / 2);
       prevZoomRef.current = zoom;
+      prevScaleRef.current = canvasScale;
     }
-  }, [zoom, viewStart, viewEnd, canvasWidth]);
+    prevCanvasWidthRef.current = canvasWidth;
+  }, [zoom, canvasScale, viewStart, viewEnd, canvasWidth]);
 
   // ---------------------------------------------------------------------------
   // Initial scroll — restore saved center date or default to today
@@ -716,10 +729,10 @@ export default function TimelineCanvas({
     const c = containerRef.current;
     if (!c) return;
     currentCenterDateRef.current = today;
-    const todayXCenter = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom) / 2;
+    const todayXCenter = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom, canvasScale) / 2;
     c.scrollLeft = Math.max(0, todayXCenter - c.clientWidth / 2);
     onCenterDateLive?.(format(today, 'yyyy-MM-dd'));
-  }, [viewStart, viewEnd, canvasWidth, zoom]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [viewStart, viewEnd, canvasWidth, zoom, canvasScale]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     onRegisterScrollToToday?.(scrollToToday);
@@ -765,7 +778,7 @@ export default function TimelineCanvas({
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
 
-      const { viewStart, viewEnd, canvasWidth, zoom, renderStart, renderEnd } = scrollStateRef.current;
+      const { viewStart, viewEnd, canvasWidth, zoom, canvasScale: sc, renderStart, renderEnd } = scrollStateRef.current;
 
       const bufferPx = vw * 1.5;
       const safeZone = bufferPx * 0.5; // inner zone where no re-render is needed
@@ -784,7 +797,7 @@ export default function TimelineCanvas({
       const EXTEND_DAYS = 500;
       const EXTEND_THRESHOLD = vw;
       if (sl < EXTEND_THRESHOLD) {
-        pendingScrollAdjRef.current += EXTEND_DAYS * pxPerDay(zoom);
+        pendingScrollAdjRef.current += EXTEND_DAYS * pxPerDay(zoom, sc);
         setViewStart(prev => subDays(prev, EXTEND_DAYS));
       }
 
@@ -842,8 +855,8 @@ export default function TimelineCanvas({
   function applyDragPosition(svgX: number, clientY: number) {
     const ds = dragStateRef.current;
     if (!ds) return;
-    const { viewStart, zoom } = scrollStateRef.current;
-    const px = pxPerDay(zoom);
+    const { viewStart, zoom, canvasScale: sc } = scrollStateRef.current;
+    const px = pxPerDay(zoom, sc);
     const origStartDays = differenceInDays(parseISO(ds.origStart), viewStart);
     const origEndDays   = differenceInDays(parseISO(ds.origEnd),   viewStart);
 
@@ -1105,8 +1118,8 @@ export default function TimelineCanvas({
     if (!c) return;
     c.style.userSelect = "none";
 
-    const { viewStart, zoom } = scrollStateRef.current;
-    const px             = pxPerDay(zoom);
+    const { viewStart, zoom, canvasScale: sc } = scrollStateRef.current;
+    const px             = pxPerDay(zoom, sc);
     const svgX           = getSvgX(e.clientX);
     const taskStartDays  = differenceInDays(parseISO(task.start), viewStart);
     const cursorDayOffset = svgX / px - taskStartDays;
@@ -1165,8 +1178,8 @@ export default function TimelineCanvas({
       if (!gd) return;
 
       const dx = ev.clientX - gd.startClientX;
-      const { zoom } = scrollStateRef.current;
-      const dayDelta = Math.round(dx / pxPerDay(zoom));
+      const { zoom, canvasScale: sc } = scrollStateRef.current;
+      const dayDelta = Math.round(dx / pxPerDay(zoom, sc));
 
       // Use getLaneAtClientY for accurate row + lane under cursor
       const hit = getLaneAtClientY(ev.clientY);
@@ -1593,8 +1606,8 @@ export default function TimelineCanvas({
             return (
               <rect
                 key={`colbg-${col.key}-${offset}`}
-                x={col.x + offset * pxPerDay("weeks")} y={HEADER_HEIGHT}
-                width={pxPerDay("weeks")} height={gridHeight - HEADER_HEIGHT}
+                x={col.x + offset * pxPerDay("weeks", canvasScale)} y={HEADER_HEIGHT}
+                width={pxPerDay("weeks", canvasScale)} height={gridHeight - HEADER_HEIGHT}
                 fill={isWeekend ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.03)"}
               />
             );
@@ -1604,7 +1617,7 @@ export default function TimelineCanvas({
           <rect
             key={`colbg-${ws.date.toISOString()}`}
             x={ws.x} y={HEADER_HEIGHT}
-            width={7 * pxPerDay("months")} height={gridHeight - HEADER_HEIGHT}
+            width={7 * pxPerDay("months", canvasScale)} height={gridHeight - HEADER_HEIGHT}
             fill={i % 2 === 0 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.18)"}
           />
         ))}
@@ -1641,8 +1654,8 @@ export default function TimelineCanvas({
           [1, 2, 3, 4, 5, 6].map((offset) => (
             <line
               key={`daysub-${col.key}-${offset}`}
-              x1={col.x + offset * pxPerDay("weeks")} y1={HEADER_HEIGHT}
-              x2={col.x + offset * pxPerDay("weeks")} y2={gridHeight}
+              x1={col.x + offset * pxPerDay("weeks", canvasScale)} y1={HEADER_HEIGHT}
+              x2={col.x + offset * pxPerDay("weeks", canvasScale)} y2={gridHeight}
               stroke="rgba(255,255,255,0.08)"
               strokeWidth={1}
             />
@@ -1661,8 +1674,8 @@ export default function TimelineCanvas({
           Array.from({ length: getDaysInMonth(col.date) - 1 }, (_, i) => (
             <line
               key={`daysub-${col.key}-${i + 1}`}
-              x1={col.x + (i + 1) * pxPerDay("months")} y1={HEADER_HEIGHT}
-              x2={col.x + (i + 1) * pxPerDay("months")} y2={gridHeight}
+              x1={col.x + (i + 1) * pxPerDay("months", canvasScale)} y1={HEADER_HEIGHT}
+              x2={col.x + (i + 1) * pxPerDay("months", canvasScale)} y2={gridHeight}
               stroke="rgba(255,255,255,0.08)"
               strokeWidth={1}
             />
@@ -1946,6 +1959,18 @@ export default function TimelineCanvas({
                     style={{ pointerEvents: "none" }}
                   />
                 )}
+                {/* Marching ants outline — search highlight on milestone */}
+                {searchHighlightTaskId === task.id && !selectedTaskIds.has(task.id) && (
+                  <polygon
+                    points={`${cx},${barCenterY - r - 4} ${cx + r + 4},${barCenterY} ${cx},${barCenterY + r + 4} ${cx - r - 4},${barCenterY}`}
+                    fill="none"
+                    stroke="rgba(250,204,21,0.9)"
+                    strokeWidth={2}
+                    strokeDasharray="6 4"
+                    className="marching-ants"
+                    style={{ pointerEvents: "none" }}
+                  />
+                )}
               </g>
             );
           }
@@ -1996,6 +2021,18 @@ export default function TimelineCanvas({
                   fill="none"
                   stroke="rgba(255,255,255,0.9)"
                   strokeWidth={1.5}
+                  strokeDasharray="6 4"
+                  className="marching-ants"
+                  style={{ pointerEvents: "none" }}
+                />
+              )}
+              {/* Marching ants outline — shown when this task is the confirmed search result */}
+              {searchHighlightTaskId === task.id && !selectedTaskIds.has(task.id) && (
+                <rect
+                  x={x - 2} y={barY - 2} width={w + 4} height={BAR_HEIGHT + 4} rx={5}
+                  fill="none"
+                  stroke="rgba(250,204,21,0.9)"
+                  strokeWidth={2}
                   strokeDasharray="6 4"
                   className="marching-ants"
                   style={{ pointerEvents: "none" }}

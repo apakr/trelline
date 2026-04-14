@@ -40,6 +40,7 @@ export interface Workspace {
   name: string;
   rows: Row[];
   zoom: ZoomLevel;
+  canvasScale?: number;    // scale multiplier for pxPerDay (1.0 = 100%); default 1
   scrollCenterDate?: string; // YYYY-MM-DD, center of viewport when last closed
   lastOpened: string;      // ISO 8601
 }
