@@ -323,6 +323,50 @@ export default function TimelineCanvas({
   const pushSnapshotRef        = useRef(pushSnapshot);
   pushSnapshotRef.current      = pushSnapshot;
 
+  // ---------------------------------------------------------------------------
+  // Marquee selection + group drag
+  // ---------------------------------------------------------------------------
+
+  // Set of selected task IDs (empty = no selection)
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const selectedTaskIdsRef = useRef<Set<string>>(new Set());
+  selectedTaskIdsRef.current = selectedTaskIds;
+
+  // The selection rectangle being drawn (SVG coordinate space)
+  const [selectionRect, setSelectionRect] = useState<{
+    x1: number; y1: number; x2: number; y2: number;
+  } | null>(null);
+
+  // Overridden positions for all tasks in the active group drag
+  const [groupDragOverrides, setGroupDragOverrides] = useState<Map<
+    string, { start: string; end: string; rowId: string; lane: number }
+  > | null>(null);
+  const groupDragOverridesRef = useRef(groupDragOverrides);
+  groupDragOverridesRef.current = groupDragOverrides;
+
+  // Mutable state for the in-progress group drag (read by document listeners)
+  const groupDragRef = useRef<{
+    anchorOrigRowId: string;
+    anchorOrigLane: number;
+    startClientX: number;
+    startClientY: number;
+    origPositions: Map<string, { start: string; end: string; rowId: string; lane: number }>;
+    hasMoved: boolean;
+  } | null>(null);
+
+  // Set after marquee mouseup to suppress the synthetic click that follows
+  const justDrewMarqueeRef = useRef(false);
+
+  // Escape clears the selection
+  useEffect(() => {
+    if (selectedTaskIds.size === 0) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setSelectedTaskIds(new Set());
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [selectedTaskIds]);
+
   // cursor position during drag — read by the auto-scroll RAF loop
   const dragClientXRef    = useRef(0);
   const dragClientYRef    = useRef(0);
@@ -380,12 +424,17 @@ export default function TimelineCanvas({
     predId: string; succId: string;
   } | null>(null);
 
-  // Close arrow menu on outside click
+  // Close arrow menu on outside click or Escape
   useEffect(() => {
     if (!arrowMenu) return;
     function handleOutside() { setArrowMenu(null); }
+    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") setArrowMenu(null); }
     document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [arrowMenu]);
 
   // ---------------------------------------------------------------------------
@@ -399,12 +448,17 @@ export default function TimelineCanvas({
     tasksInLane: Task[];  // tasks visually rendered in this lane
   } | null>(null);
 
-  // Close menu on outside click
+  // Close menu on outside click or Escape
   useEffect(() => {
     if (!laneMenu) return;
     function handleOutside() { setLaneMenu(null); }
+    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") setLaneMenu(null); }
     document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [laneMenu]);
 
   // Translate clientY to { rowId, lane } based on variable row heights
@@ -906,7 +960,17 @@ export default function TimelineCanvas({
     task: Task,
     dragType: "move" | "resizeLeft" | "resizeRight"
   ) {
-    if (e.button !== 0) return;
+    // Middle mouse and Ctrl+left both bubble up to handleCanvasMouseDown for marquee
+    if (e.button !== 0 || e.ctrlKey) return;
+
+    // If this task is part of the active selection, start a group drag instead
+    if (dragType === "move" && selectedTaskIdsRef.current.size > 0 && selectedTaskIdsRef.current.has(task.id)) {
+      e.preventDefault();
+      e.stopPropagation();
+      startGroupDrag(e, task);
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
     const c = containerRef.current;
@@ -943,11 +1007,176 @@ export default function TimelineCanvas({
   }
 
   // ---------------------------------------------------------------------------
+  // Group drag — moves all selected tasks together
+  // ---------------------------------------------------------------------------
+  function startGroupDrag(e: React.MouseEvent, anchorTask: Task) {
+    const c = containerRef.current;
+    if (!c) return;
+    c.style.userSelect = "none";
+    c.style.cursor = "grabbing";
+
+    const selectedIds = selectedTaskIdsRef.current;
+    const origPositions = new Map(
+      [...selectedIds].map(id => {
+        const t = tasksRef.current.find(t => t.id === id)!;
+        return [id, { start: t.start, end: t.end, rowId: t.rowId, lane: t.lane ?? 0 }];
+      })
+    );
+
+    groupDragRef.current = {
+      anchorOrigRowId: anchorTask.rowId,
+      anchorOrigLane: anchorTask.lane ?? 0,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      origPositions,
+      hasMoved: false,
+    };
+
+    function onMove(ev: MouseEvent) {
+      const gd = groupDragRef.current;
+      if (!gd) return;
+
+      const dx = ev.clientX - gd.startClientX;
+      const { zoom } = scrollStateRef.current;
+      const dayDelta = Math.round(dx / pxPerDay(zoom));
+
+      // Use getLaneAtClientY for accurate row + lane under cursor
+      const hit = getLaneAtClientY(ev.clientY);
+      const sr = sortedRowsRef.current;
+      const anchorOrigIdx = sr.findIndex(r => r.id === gd.anchorOrigRowId);
+
+      let rowDelta = 0;
+      let laneDelta = 0;
+      if (hit) {
+        const currentRowIdx = sr.findIndex(r => r.id === hit.rowId);
+        rowDelta = currentRowIdx - anchorOrigIdx;
+        laneDelta = hit.lane - gd.anchorOrigLane;
+      }
+
+      if (dayDelta !== 0 || rowDelta !== 0 || laneDelta !== 0) gd.hasMoved = true;
+
+      const overrides = new Map(
+        [...gd.origPositions.entries()].map(([id, orig]) => {
+          const origRowIdx = sr.findIndex(r => r.id === orig.rowId);
+          const newRowIdx = Math.max(0, Math.min(sr.length - 1, origRowIdx + rowDelta));
+          return [id, {
+            start: format(addDays(parseISO(orig.start), dayDelta), "yyyy-MM-dd"),
+            end:   format(addDays(parseISO(orig.end),   dayDelta), "yyyy-MM-dd"),
+            rowId: sr[newRowIdx].id,
+            lane:  Math.max(0, orig.lane + laneDelta),
+          }];
+        })
+      );
+      setGroupDragOverrides(overrides);
+    }
+
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+
+      const gd = groupDragRef.current;
+      groupDragRef.current = null;
+      const cont = containerRef.current;
+      if (cont) { cont.style.userSelect = ""; cont.style.cursor = ""; }
+
+      const finalOverrides = groupDragOverridesRef.current;
+      setGroupDragOverrides(null);
+
+      if (!gd?.hasMoved || !finalOverrides) return;
+
+      justDraggedRef.current = true;
+      const updates = [...finalOverrides.entries()].map(([taskId, over]) => ({
+        taskId,
+        changes: { start: over.start, end: over.end, rowId: over.rowId, lane: over.lane },
+      }));
+      batchUpdateTasksRef.current(updates);
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Marquee selection — Ctrl+left or middle mouse draws a selection rectangle
+  // ---------------------------------------------------------------------------
+  function startMarquee(e: React.MouseEvent | MouseEvent) {
+    const c = containerRef.current;
+    if (!c) return;
+    const rect = c.getBoundingClientRect();
+    const startX = e.clientX - rect.left + c.scrollLeft;
+    const startY = e.clientY - rect.top  + c.scrollTop;
+    let endX = startX;
+    let endY = startY;
+
+    setSelectionRect({ x1: startX, y1: startY, x2: startX, y2: startY });
+
+    function onMove(ev: MouseEvent) {
+      const cont = containerRef.current;
+      if (!cont) return;
+      const r = cont.getBoundingClientRect();
+      endX = ev.clientX - r.left + cont.scrollLeft;
+      endY = ev.clientY - r.top  + cont.scrollTop;
+      setSelectionRect({ x1: startX, y1: startY, x2: endX, y2: endY });
+    }
+
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      setSelectionRect(null);
+
+      // Only suppress the synthetic click for tiny drags (essentially mis-clicks).
+      // For real drags the browser doesn't fire click anyway, so don't set the flag —
+      // leaving it set would eat the user's next deselect click.
+      const totalMove = Math.sqrt((endX - startX) ** 2 + (endY - startY) ** 2);
+      justDrewMarqueeRef.current = totalMove < 4;
+
+      const minX = Math.min(startX, endX);
+      const maxX = Math.max(startX, endX);
+      const minY = Math.min(startY, endY);
+      const maxY = Math.max(startY, endY);
+
+      // Require a minimum drag size to register as marquee (not a mis-click)
+      if (maxX - minX < 4 && maxY - minY < 4) {
+        setSelectedTaskIds(new Set());
+        return;
+      }
+
+      const { viewStart: vs, viewEnd: ve, canvasWidth: cw } = scrollStateRef.current;
+      const slm = subLaneMapRef.current;
+      const rym = rowYMapRef.current;
+
+      const hit = tasksRef.current
+        .filter(task => {
+          const subLane = slm.get(task.id) ?? 0;
+          const rowY = rym.get(task.rowId);
+          if (rowY === undefined) return false;
+          const tx  = dateToX(parseISO(task.start), vs, ve, cw);
+          const txEnd = dateToX(addDays(parseISO(task.end), 1), vs, ve, cw);
+          const tw  = Math.max(txEnd - tx, 2);
+          const ty  = rowY + subLane * ROW_HEIGHT + BAR_PAD_Y;
+          return !(tx + tw < minX || tx > maxX || ty + BAR_HEIGHT < minY || ty > maxY);
+        })
+        .map(t => t.id);
+
+      setSelectedTaskIds(new Set(hit));
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  // ---------------------------------------------------------------------------
   // Canvas mousedown — start drag-to-create tracking
   // ---------------------------------------------------------------------------
   const DRAG_CREATE_THRESHOLD_PX = 5;
 
   function handleCanvasMouseDown(e: React.MouseEvent) {
+    // Middle mouse or Ctrl+left → start marquee selection
+    if (e.button === 1 || (e.button === 0 && e.ctrlKey)) {
+      e.preventDefault();
+      startMarquee(e);
+      return;
+    }
     if (e.button !== 0) return;
     const c = containerRef.current;
     if (!c) return;
@@ -1037,6 +1266,12 @@ export default function TimelineCanvas({
   async function handleCanvasClick(e: React.MouseEvent) {
     if (justDraggedRef.current) { justDraggedRef.current = false; return; }
     if (justDragCreatedRef.current) { justDragCreatedRef.current = false; return; }
+    if (justDrewMarqueeRef.current) { justDrewMarqueeRef.current = false; return; }
+    // Click on empty canvas while tasks are selected → clear selection, don't create
+    if (selectedTaskIdsRef.current.size > 0) {
+      setSelectedTaskIds(new Set());
+      return;
+    }
     const c = containerRef.current;
     if (!c) return;
     const svgY = e.clientY - c.getBoundingClientRect().top + c.scrollTop;
@@ -1182,17 +1417,21 @@ export default function TimelineCanvas({
         <defs>
           {tasks.map((task) => {
             const isBeingDragged = dragOverride?.taskId === task.id;
-            const effRowId = isBeingDragged ? dragOverride!.rowId : task.rowId;
+            const groupOver = groupDragOverrides?.get(task.id);
+            const isGroupDragged = !!groupOver;
+            const effRowId = isBeingDragged ? dragOverride!.rowId : (groupOver?.rowId ?? task.rowId);
             const rowY = rowYMap.get(effRowId);
             if (rowY === undefined) return null;
             const subLane = isBeingDragged
               ? dragOverride!.previewLane
-              : (subLaneMap.get(task.id) ?? 0);
-            const effStart = isBeingDragged ? dragOverride!.start : task.start;
-            const effEnd   = isBeingDragged ? dragOverride!.end   : task.end;
+              : isGroupDragged
+                ? groupOver!.lane
+                : (subLaneMap.get(task.id) ?? 0);
+            const effStart = isBeingDragged ? dragOverride!.start : (groupOver?.start ?? task.start);
+            const effEnd   = isBeingDragged ? dragOverride!.end   : (groupOver?.end   ?? task.end);
             const taskStart = parseISO(effStart);
             const taskEnd   = addDays(parseISO(effEnd), 1);
-            if (!isBeingDragged && (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart))) return null;
+            if (!isBeingDragged && !isGroupDragged && (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart))) return null;
             const x    = dateToX(parseISO(effStart),               viewStart, viewEnd, canvasWidth);
             const xEnd = dateToX(addDays(parseISO(effEnd), 1), viewStart, viewEnd, canvasWidth);
             const w = xEnd - x;
@@ -1312,23 +1551,43 @@ export default function TimelineCanvas({
           />
         )}
 
+        {/* ── Marquee selection rectangle ──────────────────────────────── */}
+        {selectionRect && (() => {
+          const rx = Math.min(selectionRect.x1, selectionRect.x2);
+          const ry = Math.min(selectionRect.y1, selectionRect.y2);
+          const rw = Math.abs(selectionRect.x2 - selectionRect.x1);
+          const rh = Math.abs(selectionRect.y2 - selectionRect.y1);
+          return (
+            <rect
+              x={rx} y={ry} width={rw} height={rh}
+              fill="rgba(124,106,247,0.08)"
+              stroke="rgba(124,106,247,0.7)"
+              strokeWidth={1.5}
+              strokeDasharray="6 4"
+              style={{ pointerEvents: "none" }}
+            />
+          );
+        })()}
+
         {/* ── Dependency arrows (below task bars) ──────────────────────── */}
         {tasks.flatMap((succTask) =>
           succTask.dependencies.map((predId) => {
             const predTask = tasks.find((t) => t.id === predId);
             if (!predTask) return null;
 
-            // Use dragOverride for whichever endpoint is currently being dragged
-            const predDrag = dragOverride?.taskId === predTask.id ? dragOverride : null;
-            const succDrag = dragOverride?.taskId === succTask.id ? dragOverride : null;
+            // Use dragOverride or groupDragOverrides for whichever endpoint is being dragged
+            const predDrag  = dragOverride?.taskId === predTask.id ? dragOverride : null;
+            const succDrag  = dragOverride?.taskId === succTask.id ? dragOverride : null;
+            const predGroup = groupDragOverrides?.get(predTask.id);
+            const succGroup = groupDragOverrides?.get(succTask.id);
 
-            const predEffEnd   = predDrag ? predDrag.end   : predTask.end;
-            const predEffRowId = predDrag ? predDrag.rowId : predTask.rowId;
-            const predEffLane  = predDrag ? predDrag.previewLane : (subLaneMap.get(predTask.id) ?? 0);
+            const predEffEnd   = predDrag ? predDrag.end   : (predGroup?.end   ?? predTask.end);
+            const predEffRowId = predDrag ? predDrag.rowId : (predGroup?.rowId ?? predTask.rowId);
+            const predEffLane  = predDrag ? predDrag.previewLane : (predGroup?.lane ?? subLaneMap.get(predTask.id) ?? 0);
 
-            const succEffStart = succDrag ? succDrag.start : succTask.start;
-            const succEffRowId = succDrag ? succDrag.rowId : succTask.rowId;
-            const succEffLane  = succDrag ? succDrag.previewLane : (subLaneMap.get(succTask.id) ?? 0);
+            const succEffStart = succDrag ? succDrag.start : (succGroup?.start ?? succTask.start);
+            const succEffRowId = succDrag ? succDrag.rowId : (succGroup?.rowId ?? succTask.rowId);
+            const succEffLane  = succDrag ? succDrag.previewLane : (succGroup?.lane ?? subLaneMap.get(succTask.id) ?? 0);
 
             const predRowY = rowYMap.get(predEffRowId);
             const succRowY = rowYMap.get(succEffRowId);
@@ -1415,22 +1674,26 @@ export default function TimelineCanvas({
         {tasks.map((task) => {
           // Use drag-override row/dates when this task is being dragged
           const isBeingDragged = dragOverride?.taskId === task.id;
-          const effRowId = isBeingDragged ? dragOverride!.rowId : task.rowId;
+          const groupOver = groupDragOverrides?.get(task.id);
+          const isGroupDragged = !!groupOver;
+          const effRowId = isBeingDragged ? dragOverride!.rowId : (groupOver?.rowId ?? task.rowId);
           const rowY = rowYMap.get(effRowId);
           if (rowY === undefined) return null;
 
-          // Sub-lane: use previewLane when dragging so the bar tracks the cursor lane
+          // Sub-lane: use previewLane when single-dragging, groupOver.lane when group-dragging
           const subLane = isBeingDragged
             ? dragOverride!.previewLane
-            : (subLaneMap.get(task.id) ?? 0);
+            : isGroupDragged
+              ? groupOver!.lane
+              : (subLaneMap.get(task.id) ?? 0);
 
-          const effStart = isBeingDragged ? dragOverride!.start : task.start;
-          const effEnd   = isBeingDragged ? dragOverride!.end   : task.end;
+          const effStart = isBeingDragged ? dragOverride!.start : (groupOver?.start ?? task.start);
+          const effEnd   = isBeingDragged ? dragOverride!.end   : (groupOver?.end   ?? task.end);
 
           const taskStart = parseISO(effStart);
           const taskEnd   = addDays(parseISO(effEnd), 1);
-          // Always render the dragged task even if it leaves the render window
-          if (!isBeingDragged && (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart))) return null;
+          // Always render dragged tasks (single or group) even if they leave the render window
+          if (!isBeingDragged && !isGroupDragged && (isAfter(taskStart, renderEnd) || isBefore(taskEnd, renderStart))) return null;
 
           const x    = dateToX(parseISO(effStart),               viewStart, viewEnd, canvasWidth);
           const xEnd = dateToX(addDays(parseISO(effEnd), 1), viewStart, viewEnd, canvasWidth);
@@ -1445,6 +1708,11 @@ export default function TimelineCanvas({
           function handleClick(e: React.MouseEvent) {
             e.stopPropagation();
             if (justDraggedRef.current) { justDraggedRef.current = false; return; }
+            // Clicking a selected task clears the selection (don't open panel)
+            if (selectedTaskIdsRef.current.size > 0) {
+              setSelectedTaskIds(new Set());
+              return;
+            }
             setPanel({ type: "task", taskId: task.id });
           }
 
@@ -1506,8 +1774,8 @@ export default function TimelineCanvas({
                     {displayLabel}
                   </text>
                 )}
-                {/* Dep connector dots on milestone diamonds */}
-                {isHovered && !isDepDragging && (
+                {/* Dep connector dots on milestone diamonds — hidden while selected */}
+                {isHovered && !isDepDragging && !selectedTaskIds.has(task.id) && (
                   <>
                     <circle
                       cx={cx + r} cy={barCenterY} r={5}
@@ -1533,6 +1801,18 @@ export default function TimelineCanvas({
                     fill="none"
                     stroke="var(--color-accent)"
                     strokeWidth={2}
+                    style={{ pointerEvents: "none" }}
+                  />
+                )}
+                {/* Marching ants outline on selected milestones */}
+                {selectedTaskIds.has(task.id) && (
+                  <polygon
+                    points={diamondPoints}
+                    fill="none"
+                    stroke="rgba(255,255,255,0.9)"
+                    strokeWidth={1.5}
+                    strokeDasharray="6 4"
+                    className="marching-ants"
                     style={{ pointerEvents: "none" }}
                   />
                 )}
@@ -1577,6 +1857,18 @@ export default function TimelineCanvas({
                   style={{ pointerEvents: "none" }}
                 />
               )}
+              {/* Marching ants outline — shown when this task is part of the active selection */}
+              {selectedTaskIds.has(task.id) && (
+                <rect
+                  x={x} y={barY} width={w} height={BAR_HEIGHT} rx={4}
+                  fill="none"
+                  stroke="rgba(255,255,255,0.9)"
+                  strokeWidth={1.5}
+                  strokeDasharray="6 4"
+                  className="marching-ants"
+                  style={{ pointerEvents: "none" }}
+                />
+              )}
               {w >= 24 && (
                 <text
                   x={x + 8}
@@ -1590,8 +1882,8 @@ export default function TimelineCanvas({
                   {isDone ? `✓ ${task.title}` : task.title}
                 </text>
               )}
-              {/* Invisible edge strips for resize — only when bar is wide enough */}
-              {w >= 16 && (
+              {/* Resize handles — disabled while task is selected */}
+              {w >= 16 && !selectedTaskIds.has(task.id) && (
                 <>
                   <rect
                     x={x} y={barY} width={HANDLE_W} height={BAR_HEIGHT}
@@ -1607,8 +1899,8 @@ export default function TimelineCanvas({
                   />
                 </>
               )}
-              {/* Dep connector dots — shown when hovered and no dep drag in progress */}
-              {isHovered && !isDepDragging && (
+              {/* Dep connector dots — hidden while task is selected (group drag mode) */}
+              {isHovered && !isDepDragging && !selectedTaskIds.has(task.id) && (
                 <>
                   <circle
                     cx={x + w} cy={barCenterY} r={5}

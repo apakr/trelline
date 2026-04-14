@@ -77,6 +77,14 @@ body,
   overflow-x: auto;
 }
 
+/* ── Marquee selection — marching ants animation on selected task bars ───── */
+@keyframes marchingAnts {
+  to { stroke-dashoffset: -20; }
+}
+.marching-ants {
+  animation: marchingAnts 0.5s linear infinite;
+}
+
 .rich-editor .tiptap code {
   font-family: ui-monospace, monospace;
   font-size: 0.85em;
