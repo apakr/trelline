@@ -139,7 +139,7 @@ export default function TimelineCanvas({
   onRegisterScrollToDate,
   onVerticalScroll,
 }: TimelineCanvasProps) {
-  const { setPanel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask, pushSnapshot, appConfig } = useLoadedWorkspace();
+  const { setPanel, panel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask, deleteTask, pushSnapshot, appConfig } = useLoadedWorkspace();
   const settings = appConfig.settings;
   const weekStartsOn: 0 | 1 | 6 = settings.weekStartDay === "saturday" ? 6 : settings.weekStartDay === "sunday" ? 0 : 1;
   const today = startOfDay(new Date());
@@ -322,6 +322,12 @@ export default function TimelineCanvas({
   updateRowRef.current         = updateRow;
   const pushSnapshotRef        = useRef(pushSnapshot);
   pushSnapshotRef.current      = pushSnapshot;
+  const deleteTaskRef          = useRef(deleteTask);
+  deleteTaskRef.current        = deleteTask;
+  const createTaskRef          = useRef(createTask);
+  createTaskRef.current        = createTask;
+  const panelRef               = useRef(panel);
+  panelRef.current             = panel;
 
   // ---------------------------------------------------------------------------
   // Marquee selection + group drag
@@ -331,6 +337,14 @@ export default function TimelineCanvas({
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const selectedTaskIdsRef = useRef<Set<string>>(new Set());
   selectedTaskIdsRef.current = selectedTaskIds;
+
+  // Pending multi-delete confirmation: holds the tasks that will be deleted
+  const [deleteConfirm, setDeleteConfirm] = useState<Task[] | null>(null);
+
+  // Right-click context menu on a task (or group of selected tasks)
+  const [taskMenu, setTaskMenu] = useState<{
+    x: number; y: number; tasks: Task[];
+  } | null>(null);
 
   // The selection rectangle being drawn (SVG coordinate space)
   const [selectionRect, setSelectionRect] = useState<{
@@ -357,15 +371,27 @@ export default function TimelineCanvas({
   // Set after marquee mouseup to suppress the synthetic click that follows
   const justDrewMarqueeRef = useRef(false);
 
-  // Escape clears the selection
+  // Escape clears selection; Delete triggers confirm dialog
   useEffect(() => {
     if (selectedTaskIds.size === 0) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setSelectedTaskIds(new Set());
+      if (e.key === "Escape") {
+        setSelectedTaskIds(new Set());
+        setDeleteConfirm(null);
+        return;
+      }
+      if (e.key === "Backspace") {
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+        const toDelete = [...selectedTaskIdsRef.current]
+          .map(id => tasksRef.current.find(t => t.id === id))
+          .filter(Boolean) as Task[];
+        if (toDelete.length > 0) setDeleteConfirm(toDelete);
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selectedTaskIds]);
+  }, [selectedTaskIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // cursor position during drag — read by the auto-scroll RAF loop
   const dragClientXRef    = useRef(0);
@@ -460,6 +486,108 @@ export default function TimelineCanvas({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [laneMenu]);
+
+  // Close task menu on outside click or Escape
+  useEffect(() => {
+    if (!taskMenu) return;
+    function handleOutside() { setTaskMenu(null); }
+    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") setTaskMenu(null); }
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [taskMenu]);
+
+  // Escape closes the delete-confirm dialog regardless of selection state
+  useEffect(() => {
+    if (!deleteConfirm) return;
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setDeleteConfirm(null); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [deleteConfirm]);
+
+  // Document-level contextmenu listener — handles right-clicks while a panel is
+  // open (the backdrop sits at z-[9] above the canvas and blocks React onContextMenu
+  // on SVG elements). When no panel is open the React onContextMenu handlers on
+  // each task <g> fire directly and stop propagation, so this never double-fires.
+  useEffect(() => {
+    function onDocumentContextMenu(e: MouseEvent) {
+      // Only needed when the backdrop is covering the canvas
+      if (panelRef.current.type === "none") return;
+      const c = containerRef.current;
+      if (!c) return;
+      const rect = c.getBoundingClientRect();
+      if (e.clientX < rect.left || e.clientX > rect.right ||
+          e.clientY < rect.top  || e.clientY > rect.bottom) return;
+      if (dragStateRef.current?.hasMoved) return;
+      e.preventDefault();
+
+      // Find which task (if any) is under the cursor
+      const els = document.elementsFromPoint(e.clientX, e.clientY);
+      let taskId: string | null = null;
+      for (const el of els) {
+        const found = (el as Element).closest?.('[data-task-id]');
+        if (found) { taskId = found.getAttribute('data-task-id'); break; }
+      }
+
+      if (taskId !== null) {
+        const task = tasksRef.current.find(t => t.id === taskId);
+        if (!task) return;
+        const sel = selectedTaskIdsRef.current;
+        const targetTasks = sel.size > 0 && sel.has(task.id)
+          ? ([...sel].map(id => tasksRef.current.find(t => t.id === id)).filter(Boolean) as Task[])
+          : [task];
+        setLaneMenu(null);
+        setArrowMenu(null);
+        setTaskMenu({ x: e.clientX, y: e.clientY, tasks: targetTasks });
+      } else {
+        const hit = getLaneAtClientY(e.clientY);
+        if (!hit) return;
+        const { rowId, lane } = hit;
+        const tasksInLane = tasksRef.current.filter(
+          t => t.rowId === rowId && (subLaneMapRef.current.get(t.id) ?? 0) === lane
+        );
+        setLaneMenu({ x: e.clientX, y: e.clientY, rowId, lane, tasksInLane });
+      }
+    }
+    document.addEventListener('contextmenu', onDocumentContextMenu);
+    return () => document.removeEventListener('contextmenu', onDocumentContextMenu);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleTaskContextMenu(e: React.MouseEvent, task: Task) {
+    e.preventDefault();
+    e.stopPropagation(); // prevent lane menu from also opening
+    if (dragStateRef.current?.hasMoved) return;
+    const sel = selectedTaskIdsRef.current;
+    const targetTasks =
+      sel.size > 0 && sel.has(task.id)
+        ? ([...sel].map(id => tasksRef.current.find(t => t.id === id)).filter(Boolean) as Task[])
+        : [task];
+    setLaneMenu(null);
+    setArrowMenu(null);
+    setTaskMenu({ x: e.clientX, y: e.clientY, tasks: targetTasks });
+  }
+
+  async function handleDuplicate(tasksToDup: Task[], withDeps: boolean) {
+    setTaskMenu(null);
+    for (const orig of tasksToDup) {
+      const created = await createTaskRef.current({
+        title: orig.title,
+        rowId: orig.rowId,
+        start: orig.start,
+        end: orig.end,
+        isMilestone: orig.isMilestone,
+        color: orig.color,
+        notes: orig.notes,
+        lane: orig.lane,
+      });
+      if (withDeps && orig.dependencies.length > 0) {
+        await updateTaskRef.current(created.id, { dependencies: orig.dependencies });
+      }
+    }
+  }
 
   // Translate clientY to { rowId, lane } based on variable row heights
   function getLaneAtClientY(clientY: number): { rowId: string; lane: number } | null {
@@ -1741,8 +1869,10 @@ export default function TimelineCanvas({
             return (
               <g
                 key={task.id}
+                data-task-id={task.id}
                 style={{ cursor: "grab" }}
                 onClick={handleClick}
+                onContextMenu={(e) => handleTaskContextMenu(e, task)}
                 onMouseDown={(e) => handleBarMouseDown(e, task, "move")}
                 onMouseEnter={() => setHoveredTaskId(task.id)}
                 onMouseLeave={() => setHoveredTaskId(null)}
@@ -1825,8 +1955,10 @@ export default function TimelineCanvas({
           return (
             <g
               key={task.id}
+              data-task-id={task.id}
               style={{ cursor: "grab" }}
               onClick={handleClick}
+              onContextMenu={(e) => handleTaskContextMenu(e, task)}
               onMouseDown={(e) => handleBarMouseDown(e, task, "move")}
               onMouseEnter={() => setHoveredTaskId(task.id)}
               onMouseLeave={() => setHoveredTaskId(null)}
@@ -2351,6 +2483,107 @@ export default function TimelineCanvas({
             </svg>
             Delete dependency
           </button>
+        </div>
+      )}
+      {/* ── Task right-click context menu ───────────────────────────────────── */}
+      {taskMenu && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed",
+            left: Math.min(taskMenu.x, window.innerWidth - 228),
+            top: taskMenu.y + 4,
+            zIndex: 999,
+            width: 224,
+          }}
+          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-1 shadow-xl"
+        >
+          <div className="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+            {taskMenu.tasks.length === 1
+              ? (taskMenu.tasks[0].title || "Untitled")
+              : `${taskMenu.tasks.length} tasks selected`}
+          </div>
+          <div className="mx-2 mb-1 border-t border-[var(--color-border)]" />
+          <button
+            onClick={() => { setDeleteConfirm(taskMenu.tasks); setTaskMenu(null); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-400 hover:bg-red-500/10"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M2 4h8M4.5 4V3h3v1M5 6v3M7 6v3M3 4l.5 5.5h5L9 4" />
+            </svg>
+            Delete
+          </button>
+          <div className="mx-2 my-1 border-t border-[var(--color-border)]" />
+          <button
+            onClick={() => handleDuplicate(taskMenu.tasks, true)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="4" width="7" height="7" rx="1" />
+              <path d="M1 8V2a1 1 0 0 1 1-1h6" />
+            </svg>
+            Duplicate
+          </button>
+          <button
+            onClick={() => handleDuplicate(taskMenu.tasks, false)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="4" width="7" height="7" rx="1" />
+              <path d="M1 8V2a1 1 0 0 1 1-1h6" />
+            </svg>
+            Duplicate without dependencies
+          </button>
+        </div>
+      )}
+      {/* ── Multi-select delete confirmation ─────────────────────────────────── */}
+      {deleteConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); setDeleteConfirm(null); }}
+        >
+          <div
+            className="w-[380px] rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">
+              Delete {deleteConfirm.length === 1 ? "1 task" : `${deleteConfirm.length} tasks`}?
+            </h2>
+            <p className="mb-3 text-xs text-[var(--color-text-secondary)]">
+              This action cannot be undone.
+            </p>
+            <ul className="mb-4 max-h-48 space-y-0.5 overflow-y-auto text-xs text-[var(--color-text-secondary)]">
+              {deleteConfirm.map(t => (
+                <li key={t.id} className="flex items-center gap-1.5">
+                  <span className="text-[var(--color-text-secondary)]">•</span>
+                  <span className="truncate text-[var(--color-text-primary)]">{t.title || "Untitled"}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="rounded border border-[var(--color-border)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const toDelete = deleteConfirm;
+                  setDeleteConfirm(null);
+                  setSelectedTaskIds(new Set());
+                  for (const t of toDelete) {
+                    await deleteTaskRef.current(t.id);
+                  }
+                }}
+                className="rounded border border-red-500/50 px-3 py-1.5 text-sm font-medium text-red-400 hover:bg-red-500/10"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
