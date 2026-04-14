@@ -10,6 +10,10 @@ import TaskDetailPanel from "./TaskDetailPanel";
 
 export default function TimelineView() {
   const { workspace, tasks, addRow, updateRow, reorderRows, deleteRow, setScrollCenterDate, panel, setPanel, deleteLaneAndTask, appConfig } = useLoadedWorkspace();
+  function toggleRowCollapse(rowId: string) {
+    const row = workspace.rows.find((r) => r.id === rowId);
+    if (row) updateRow(rowId, { collapsed: !row.collapsed });
+  }
   const dateFmt = appConfig.settings.dateFormat === "YYYY-DD-MM" ? "yyyy-dd-MM" : "yyyy-MM-dd";
   const scrollToTodayRef = useRef<(() => void) | null>(null);
   const scrollToDateRef  = useRef<((date: Date) => void) | null>(null);
@@ -121,6 +125,7 @@ export default function TimelineView() {
             const next = Math.max(1, (row.laneCount ?? 1) - 1);
             if (next >= min) updateRow(rowId, { laneCount: next });
           }}
+          onToggleCollapse={toggleRowCollapse}
         />
 
         <TimelineCanvas

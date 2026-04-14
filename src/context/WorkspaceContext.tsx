@@ -66,7 +66,7 @@ interface WorkspaceContextValue {
 
   // Rows
   addRow: (name: string) => Promise<Row>;
-  updateRow: (rowId: string, updates: Partial<Pick<Row, "name" | "color" | "laneCount">>) => Promise<void>;
+  updateRow: (rowId: string, updates: Partial<Pick<Row, "name" | "color" | "laneCount" | "collapsed">>) => Promise<void>;
   reorderRows: (orderedIds: string[]) => Promise<void>;
   deleteRow: (rowId: string) => Promise<void>;
 
@@ -365,7 +365,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateRow = useCallback(
-    async (rowId: string, updates: Partial<Pick<Row, "name" | "color" | "laneCount">>) => {
+    async (rowId: string, updates: Partial<Pick<Row, "name" | "color" | "laneCount" | "collapsed">>) => {
       pushSnapshot();
       const current = requireState();
       const updatedRows = current.workspace.rows.map((r) =>

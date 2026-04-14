@@ -222,20 +222,20 @@ export default function TimelineCanvas({
   const todayX = dateToX(today, viewStart, viewEnd, canvasWidth) + pxPerDay(zoom, canvasScale) / 2;
   const todayVisible = todayX >= 0 && todayX <= canvasWidth;
 
-  // --- row Y positions (variable height — depends on sub-lane count) ---
+  // --- row Y positions (variable height — collapsed rows use 1 lane height) ---
   const rowYMap = useMemo(() => {
     const map = new Map<string, number>();
     let y = HEADER_HEIGHT;
     for (const row of sortedRows) {
       map.set(row.id, y);
-      y += (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT;
+      y += row.collapsed ? ROW_HEIGHT : (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT;
     }
     return map;
   }, [sortedRows, rowLaneCount]);
 
   const gridHeight = useMemo(() => {
     return sortedRows.reduce(
-      (acc, row) => acc + (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT,
+      (acc, row) => acc + (row.collapsed ? ROW_HEIGHT : (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT),
       HEADER_HEIGHT
     );
   }, [sortedRows, rowLaneCount]);
@@ -1625,9 +1625,17 @@ export default function TimelineCanvas({
         {/* ── Row bands ────────────────────────────────────────────────── */}
         {sortedRows.map((row) => {
           const y = rowYMap.get(row.id)!;
-          const rowHeight = (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT;
+          const rowHeight = row.collapsed ? ROW_HEIGHT : (rowLaneCount.get(row.id) ?? 1) * ROW_HEIGHT;
           return (
             <g key={row.id}>
+              {/* Collapsed fill — subtle tint over the collapsed row band */}
+              {row.collapsed && (
+                <rect
+                  x={0} y={y} width={canvasWidth} height={ROW_HEIGHT}
+                  fill="rgba(255,255,255,0.07)"
+                  style={{ pointerEvents: "none" }}
+                />
+              )}
               <line
                 x1={0} y1={y + rowHeight}
                 x2={canvasWidth} y2={y + rowHeight}
@@ -1730,6 +1738,11 @@ export default function TimelineCanvas({
             const succEffRowId = succDrag ? succDrag.rowId : (succGroup?.rowId ?? succTask.rowId);
             const succEffLane  = succDrag ? succDrag.previewLane : (succGroup?.lane ?? subLaneMap.get(succTask.id) ?? 0);
 
+            // Hide arrows where either endpoint row is collapsed
+            const predRow = sortedRows.find((r) => r.id === predEffRowId);
+            const succRow = sortedRows.find((r) => r.id === succEffRowId);
+            if (predRow?.collapsed || succRow?.collapsed) return null;
+
             const predRowY = rowYMap.get(predEffRowId);
             const succRowY = rowYMap.get(succEffRowId);
             if (predRowY === undefined || succRowY === undefined) return null;
@@ -1818,6 +1831,13 @@ export default function TimelineCanvas({
           const groupOver = groupDragOverrides?.get(task.id);
           const isGroupDragged = !!groupOver;
           const effRowId = isBeingDragged ? dragOverride!.rowId : (groupOver?.rowId ?? task.rowId);
+
+          // Skip task bars for collapsed rows (unless actively being dragged)
+          if (!isBeingDragged && !isGroupDragged) {
+            const effRow = sortedRows.find((r) => r.id === effRowId);
+            if (effRow?.collapsed) return null;
+          }
+
           const rowY = rowYMap.get(effRowId);
           if (rowY === undefined) return null;
 

@@ -17,6 +17,7 @@ interface RowPanelProps {
   onChangeColor: (rowId: string, color: string) => void;
   onAddLane: (rowId: string) => void;
   onRemoveLane: (rowId: string) => void;
+  onToggleCollapse: (rowId: string) => void;
 }
 
 export default function RowPanel({
@@ -32,6 +33,7 @@ export default function RowPanel({
   onChangeColor,
   onAddLane,
   onRemoveLane,
+  onToggleCollapse,
 }: RowPanelProps) {
   // ── Inline rename ──────────────────────────────────────────────────────────
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
@@ -111,11 +113,11 @@ export default function RowPanel({
       const rect = container.getBoundingClientRect();
       const y = ev.clientY - rect.top + container.scrollTop;
 
-      // Find which gap the cursor is nearest to
+      // Find which gap the cursor is nearest to (use effective height)
       let accumulated = 0;
       let idx = 0;
       for (const row of rows) {
-        const h = ROW_HEIGHT * (rowLaneCount.get(row.id) ?? 1);
+        const h = row.collapsed ? ROW_HEIGHT : ROW_HEIGHT * (rowLaneCount.get(row.id) ?? 1);
         if (y < accumulated + h / 2) break;
         accumulated += h;
         idx++;
@@ -149,11 +151,12 @@ export default function RowPanel({
     document.addEventListener("mouseup", onMouseUp);
   }
 
-  // Calculate Y offset of the drop indicator line
+  // Calculate Y offset of the drop indicator line (use effective height)
   function dropIndicatorY(dropIndex: number): number {
     let y = 0;
     for (let i = 0; i < Math.min(dropIndex, rows.length); i++) {
-      y += ROW_HEIGHT * (rowLaneCount.get(rows[i].id) ?? 1);
+      const row = rows[i];
+      y += row.collapsed ? ROW_HEIGHT : ROW_HEIGHT * (rowLaneCount.get(row.id) ?? 1);
     }
     return y;
   }
@@ -195,7 +198,7 @@ export default function RowPanel({
         ) : (
           <>
             {rows.map((row) => {
-              const height = ROW_HEIGHT * (rowLaneCount.get(row.id) ?? 1);
+              const effectiveHeight = row.collapsed ? ROW_HEIGHT : ROW_HEIGHT * (rowLaneCount.get(row.id) ?? 1);
               const isDragging = dragState?.draggingId === row.id;
               return (
                 <div
@@ -207,7 +210,7 @@ export default function RowPanel({
                     // ── Inline rename ──
                     <div
                       className="flex flex-shrink-0 items-start border-b border-[var(--color-border)] px-3 pt-3"
-                      style={{ height }}
+                      style={{ height: effectiveHeight }}
                     >
                       <input
                         ref={editInputRef}
@@ -223,7 +226,7 @@ export default function RowPanel({
                     <RowItem
                       row={row}
                       taskCount={taskCountByRowId.get(row.id) ?? 0}
-                      height={height}
+                      height={effectiveHeight}
                       laneCount={rowLaneCount.get(row.id) ?? 1}
                       minLaneCount={rowMinLaneCount.get(row.id) ?? 1}
                       onDelete={() => onDeleteRow(row.id)}
@@ -231,6 +234,7 @@ export default function RowPanel({
                       onRemoveLane={() => onRemoveLane(row.id)}
                       onDoubleClickName={() => startEdit(row.id, row.name)}
                       onDragStart={(e) => startDrag(e, row.id)}
+                      onToggleCollapse={() => onToggleCollapse(row.id)}
                     />
                   )}
                 </div>
@@ -323,6 +327,7 @@ function RowItem({
   onRemoveLane,
   onDoubleClickName,
   onDragStart,
+  onToggleCollapse,
 }: {
   row: Row;
   taskCount: number;
@@ -334,16 +339,33 @@ function RowItem({
   onRemoveLane: () => void;
   onDoubleClickName: () => void;
   onDragStart: (e: React.MouseEvent) => void;
+  onToggleCollapse: () => void;
 }) {
   const canRemoveLane = laneCount > 1 && laneCount > minLaneCount;
+  const collapsed = row.collapsed ?? false;
 
   return (
     <div
-      className="group relative flex flex-shrink-0 flex-col justify-between border-b border-[var(--color-border)] px-3 pt-3 pb-2"
-      style={{ height }}
+      className="group relative flex flex-shrink-0 flex-col justify-between border-b border-[var(--color-border)] px-3 pb-2"
+      style={{ height, paddingTop: collapsed ? 0 : 12 }}
     >
-      {/* Top: grip + color swatch + name */}
-      <div className="flex min-w-0 items-center gap-1.5">
+      {/* Top: collapse toggle + grip + color swatch + name */}
+      <div className="flex min-w-0 items-center gap-1.5" style={{ marginTop: collapsed ? "auto" : 0, marginBottom: collapsed ? "auto" : 0 }}>
+        {/* Collapse chevron */}
+        <button
+          onClick={onToggleCollapse}
+          title={collapsed ? "Expand row" : "Collapse row"}
+          className="flex-shrink-0 text-[var(--color-text-secondary)] opacity-40 hover:opacity-100 transition-opacity"
+        >
+          <svg
+            width="10" height="10" viewBox="0 0 10 10"
+            fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+            style={{ transform: collapsed ? "rotate(-90deg)" : "none", transition: "transform 150ms ease" }}
+          >
+            <path d="M2 4l3 3 3-3" />
+          </svg>
+        </button>
+
         {/* Drag grip */}
         <div
           onMouseDown={onDragStart}
@@ -371,54 +393,63 @@ function RowItem({
         >
           {row.name}
         </span>
-      </div>
 
-      {/* Bottom: lane controls + delete */}
-      <div className="flex items-center justify-between">
-        <div className={`flex items-center gap-1 ${laneCount === 1 ? "opacity-0 group-hover:opacity-100" : "opacity-100"} transition-opacity`}>
-          <span className="text-[10px] text-[var(--color-text-secondary)]">
-            {laneCount} {laneCount === 1 ? "lane" : "lanes"}
+        {/* Task count badge shown when collapsed */}
+        {collapsed && taskCount > 0 && (
+          <span className="ml-auto flex-shrink-0 rounded bg-[var(--color-bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
+            {taskCount}
           </span>
-          <button
-            onClick={onAddLane}
-            title="Add lane"
-            className="flex h-4 w-4 items-center justify-center rounded text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
-          >
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <path d="M4 1v6M1 4h6" />
-            </svg>
-          </button>
-          <button
-            onClick={onRemoveLane}
-            disabled={!canRemoveLane}
-            title="Remove lane"
-            className="flex h-4 w-4 items-center justify-center rounded text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-30"
-          >
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <path d="M1 4h6" />
-            </svg>
-          </button>
-        </div>
-
-        {/* Delete row button + task count */}
-        <div className="flex items-center gap-1">
-          {taskCount > 0 && (
-            <span className="rounded bg-[var(--color-bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
-              {taskCount}
-            </span>
-          )}
-          <button
-            onClick={taskCount > 0 ? undefined : onDelete}
-            disabled={taskCount > 0}
-            title={taskCount > 0 ? `Cannot delete — ${taskCount} task${taskCount > 1 ? "s" : ""} in this row` : "Delete row"}
-            className="hidden rounded p-0.5 text-[var(--color-text-secondary)] hover:bg-red-500/15 hover:text-red-400 group-hover:flex disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--color-text-secondary)]"
-          >
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <path d="M2.5 4h8M5 4V2.5h3V4M5.5 6.5v3M7.5 6.5v3M3.5 4l.5 6.5h5.5L10 4" />
-            </svg>
-          </button>
-        </div>
+        )}
       </div>
+
+      {/* Bottom: lane controls + delete — hidden when collapsed */}
+      {!collapsed && (
+        <div className="flex items-center justify-between">
+          <div className={`flex items-center gap-1 ${laneCount === 1 ? "opacity-0 group-hover:opacity-100" : "opacity-100"} transition-opacity`}>
+            <span className="text-[10px] text-[var(--color-text-secondary)]">
+              {laneCount} {laneCount === 1 ? "lane" : "lanes"}
+            </span>
+            <button
+              onClick={onAddLane}
+              title="Add lane"
+              className="flex h-4 w-4 items-center justify-center rounded text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
+            >
+              <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M4 1v6M1 4h6" />
+              </svg>
+            </button>
+            <button
+              onClick={onRemoveLane}
+              disabled={!canRemoveLane}
+              title="Remove lane"
+              className="flex h-4 w-4 items-center justify-center rounded text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M1 4h6" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Delete row button + task count */}
+          <div className="flex items-center gap-1">
+            {taskCount > 0 && (
+              <span className="rounded bg-[var(--color-bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
+                {taskCount}
+              </span>
+            )}
+            <button
+              onClick={taskCount > 0 ? undefined : onDelete}
+              disabled={taskCount > 0}
+              title={taskCount > 0 ? `Cannot delete — ${taskCount} task${taskCount > 1 ? "s" : ""} in this row` : "Delete row"}
+              className="hidden rounded p-0.5 text-[var(--color-text-secondary)] hover:bg-red-500/15 hover:text-red-400 group-hover:flex disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--color-text-secondary)]"
+            >
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M2.5 4h8M5 4V2.5h3V4M5.5 6.5v3M7.5 6.5v3M3.5 4l.5 6.5h5.5L10 4" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

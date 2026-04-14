@@ -16,6 +16,7 @@ export interface Row {
   order: number;
   color: string;    // hex, e.g. "#a78bfa"
   laneCount: number; // user-controlled minimum number of sub-lanes (never auto-decremented)
+  collapsed?: boolean; // when true, row renders at 1-lane height and task bars are hidden
 }
 
 export interface Task {
