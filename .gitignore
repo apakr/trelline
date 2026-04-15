@@ -28,3 +28,9 @@ src-tauri/target/
 *.njsproj
 *.sln
 *.sw?
+
+# Personal notes and local workspace data
+SETTINGS_IDEAS.md
+SPEC.md
+test_workspace/
+
