@@ -13,7 +13,7 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { v4 as uuidv4 } from "uuid";
-import type { Task, Workspace, WorkspaceState, ZoomLevel } from "../types";
+import type { Row, Task, Workspace, WorkspaceState, ZoomLevel } from "../types";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -90,10 +90,18 @@ export async function createWorkspace(
   name: string,
   zoom: ZoomLevel = "weeks"
 ): Promise<WorkspaceState> {
+  const defaultRow: Row = {
+    id: `row_${uuidv4()}`,
+    name: "Row 1",
+    order: 0,
+    color: "#6366f1",
+    laneCount: 3,
+  };
+
   const workspace: Workspace = {
     id: `workspace_${uuidv4()}`,
     name,
-    rows: [],
+    rows: [defaultRow],
     zoom,
     lastOpened: new Date().toISOString(),
   };

@@ -15,7 +15,10 @@ export default function NewTaskPanel({ defaultDate }: NewTaskPanelProps) {
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setPanel({ type: "none" });
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setPanel({ type: "none" });
+      }
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);

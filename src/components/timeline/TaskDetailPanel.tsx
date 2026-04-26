@@ -36,6 +36,7 @@ export default function TaskDetailPanel({ taskId, insertedLane }: TaskDetailPane
   useEffect(() => {
     async function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
+        e.preventDefault();
         skipSaveRef.current = true;
         if (!draftTitleRef.current.trim()) {
           await deleteLaneAndTaskRef.current(taskId, insertedLaneRef.current);

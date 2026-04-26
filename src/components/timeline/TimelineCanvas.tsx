@@ -144,7 +144,7 @@ export default function TimelineCanvas({
   onRegisterScrollToDate,
   onVerticalScroll,
 }: TimelineCanvasProps) {
-  const { setPanel, panel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask, deleteTask, pushSnapshot, appConfig } = useLoadedWorkspace();
+  const { setPanel, panel, updateTask, updateRow, batchUpdateTasks, createTask, insertLaneAndCreateTask, deleteTask, pushSnapshot, appConfig, setCanvasScale } = useLoadedWorkspace();
   const settings = appConfig.settings;
   const weekStartsOn: 0 | 1 | 6 = settings.weekStartDay === "saturday" ? 6 : settings.weekStartDay === "sunday" ? 0 : 1;
   const today = startOfDay(new Date());
@@ -265,11 +265,13 @@ export default function TimelineCanvas({
   const scrollStateRef = useRef({ viewStart, viewEnd, canvasWidth, zoom, canvasScale, renderStart, renderEnd });
   scrollStateRef.current = { viewStart, viewEnd, canvasWidth, zoom, canvasScale, renderStart, renderEnd };
 
-  // Invert scroll: when enabled, route vertical wheel delta to horizontal scroll
+  // Invert scroll: when enabled, route vertical wheel delta to horizontal scroll.
+  // Skip when Ctrl/Cmd is held — that's handled by the scale handler below.
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !settings.invertScroll) return;
     function onWheel(e: WheelEvent) {
+      if (e.ctrlKey || e.metaKey) return;
       if (e.deltaY !== 0 && e.deltaX === 0) {
         e.preventDefault();
         el!.scrollLeft += e.deltaY;
@@ -278,6 +280,31 @@ export default function TimelineCanvas({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [settings.invertScroll]);
+
+  // Ctrl/Cmd+scroll anywhere on the canvas adjusts the canvas scale.
+  // Uses refs so the handler never has a stale closure.
+  const setCanvasScaleRef = useRef(setCanvasScale);
+  setCanvasScaleRef.current = setCanvasScale;
+  const canvasScaleAccRef = useRef(canvasScale);
+  canvasScaleAccRef.current = canvasScale;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = e.deltaY > 0 ? -1 : 1;
+      const nextPct = Math.round(canvasScaleAccRef.current * 100) + delta;
+      const clamped = Math.max(50, Math.min(200, nextPct));
+      const next = clamped / 100;
+      canvasScaleAccRef.current = next;
+      setCanvasScaleRef.current(next);
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []); // stable refs — no deps needed
 
   // Stable refs so drag callbacks never read stale closures
   const sortedRowsRef = useRef(sortedRows);
@@ -383,6 +410,7 @@ export default function TimelineCanvas({
     if (selectedTaskIds.size === 0) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
+        e.preventDefault();
         setSelectedTaskIds(new Set());
         setDeleteConfirm(null);
         return;
@@ -461,7 +489,7 @@ export default function TimelineCanvas({
   useEffect(() => {
     if (!arrowMenu) return;
     function handleOutside() { setArrowMenu(null); }
-    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") setArrowMenu(null); }
+    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") { e.preventDefault(); setArrowMenu(null); } }
     document.addEventListener("mousedown", handleOutside);
     document.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -485,7 +513,7 @@ export default function TimelineCanvas({
   useEffect(() => {
     if (!laneMenu) return;
     function handleOutside() { setLaneMenu(null); }
-    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") setLaneMenu(null); }
+    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") { e.preventDefault(); setLaneMenu(null); } }
     document.addEventListener("mousedown", handleOutside);
     document.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -498,7 +526,7 @@ export default function TimelineCanvas({
   useEffect(() => {
     if (!taskMenu) return;
     function handleOutside() { setTaskMenu(null); }
-    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") setTaskMenu(null); }
+    function handleKeyDown(e: KeyboardEvent) { if (e.key === "Escape") { e.preventDefault(); setTaskMenu(null); } }
     document.addEventListener("mousedown", handleOutside);
     document.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -510,7 +538,7 @@ export default function TimelineCanvas({
   // Escape closes the delete-confirm dialog regardless of selection state
   useEffect(() => {
     if (!deleteConfirm) return;
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setDeleteConfirm(null); }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") { e.preventDefault(); setDeleteConfirm(null); } }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [deleteConfirm]);
@@ -687,18 +715,22 @@ export default function TimelineCanvas({
 
   // ---------------------------------------------------------------------------
   // Zoom / scale transition — preserve viewport center date when zoom or scale changes.
-  // Reads c.scrollLeft + prevCanvasWidthRef to compute the center date precisely,
-  // avoiding stale-ref drift during rapid ctrl+scroll scale changes.
+  //
+  // Uses currentCenterDateRef (maintained by the scroll handler on every scroll)
+  // instead of re-deriving from c.scrollLeft + prevCanvasWidthRef. The old approach
+  // raced with the browser: when the canvas shrinks (e.g. days→weeks), the browser
+  // clamps scrollLeft to the new max before useEffect fires, so the derived center date
+  // was wrong. currentCenterDateRef is set in a rAF callback, which runs AFTER
+  // useLayoutEffect, so it still holds the pre-change center date here.
+  //
+  // useLayoutEffect (vs useEffect) applies the scroll correction before paint,
+  // eliminating the visible flash of the wrong scroll position.
   // ---------------------------------------------------------------------------
-  useEffect(() => {
+  useLayoutEffect(() => {
     const c = containerRef.current;
     if (!c) return;
     if (prevZoomRef.current !== zoom || prevScaleRef.current !== canvasScale) {
-      // Derive center date from the actual current scroll position and the
-      // PREVIOUS canvas width (before this render changed the scale/zoom).
-      const prevCW = prevCanvasWidthRef.current;
-      const centerX = c.scrollLeft + c.clientWidth / 2;
-      const centerDate = xToDate(centerX, viewStart, viewEnd, prevCW);
+      const centerDate = currentCenterDateRef.current;
       const newCenterX = dateToX(centerDate, viewStart, viewEnd, canvasWidth);
       c.scrollLeft = Math.max(0, newCenterX - c.clientWidth / 2);
       prevZoomRef.current = zoom;
@@ -1101,8 +1133,8 @@ export default function TimelineCanvas({
     task: Task,
     dragType: "move" | "resizeLeft" | "resizeRight"
   ) {
-    // Middle mouse and Ctrl+left both bubble up to handleCanvasMouseDown for marquee
-    if (e.button !== 0 || e.ctrlKey) return;
+    // Middle mouse and Ctrl/Cmd+left both bubble up to handleCanvasMouseDown for marquee
+    if (e.button !== 0 || e.ctrlKey || e.metaKey) return;
 
     // If this task is part of the active selection, start a group drag instead
     if (dragType === "move" && selectedTaskIdsRef.current.size > 0 && selectedTaskIdsRef.current.has(task.id)) {
@@ -1312,8 +1344,8 @@ export default function TimelineCanvas({
   const DRAG_CREATE_THRESHOLD_PX = 5;
 
   function handleCanvasMouseDown(e: React.MouseEvent) {
-    // Middle mouse or Ctrl+left → start marquee selection
-    if (e.button === 1 || (e.button === 0 && e.ctrlKey)) {
+    // Middle mouse or Ctrl/Cmd+left → start marquee selection
+    if (e.button === 1 || (e.button === 0 && (e.ctrlKey || e.metaKey))) {
       e.preventDefault();
       startMarquee(e);
       return;

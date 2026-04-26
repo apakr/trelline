@@ -324,14 +324,22 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const setZoom = useCallback(async (zoom: ZoomLevel) => {
     const current = requireState();
-    const updated = updateWorkspaceInState({ zoom });
-    await saveWorkspace(current.folderPath, withScrollCenter(updated.workspace));
+    // Functional update: always applies on top of the *latest* state so a
+    // concurrent scale change (e.g. rapid Ctrl+/-) can't overwrite this zoom.
+    setWorkspaceState(prev =>
+      prev ? { ...prev, workspace: { ...prev.workspace, zoom } } : prev
+    );
+    await saveWorkspace(current.folderPath, withScrollCenter({ ...current.workspace, zoom }));
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setCanvasScale = useCallback(async (scale: number) => {
     const current = requireState();
-    const updated = updateWorkspaceInState({ canvasScale: scale });
-    await saveWorkspace(current.folderPath, withScrollCenter(updated.workspace));
+    // Functional update: always applies on top of the *latest* state so a
+    // concurrent zoom change (e.g. clicking Days/Months) can't be overwritten.
+    setWorkspaceState(prev =>
+      prev ? { ...prev, workspace: { ...prev.workspace, canvasScale: scale } } : prev
+    );
+    await saveWorkspace(current.folderPath, withScrollCenter({ ...current.workspace, canvasScale: scale }));
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const forgetRecentWorkspace = useCallback(async (folderPath: string) => {

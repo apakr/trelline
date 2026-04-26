@@ -14,9 +14,9 @@ const ZOOM_LABELS: Record<ZoomLevel, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Scale presets: 10% – 200% in 10% steps
+// Scale presets: 50% – 200% in 10% steps
 // ---------------------------------------------------------------------------
-const SCALE_PRESETS = Array.from({ length: 20 }, (_, i) => (i + 1) * 0.1);
+const SCALE_PRESETS = Array.from({ length: 16 }, (_, i) => (i + 5) * 0.1);
 
 function scaleLabel(scale: number) {
   return `${Math.round(scale * 100)}%`;
@@ -116,13 +116,22 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
   const localScaleRef = useRef(currentScale);
   localScaleRef.current = currentScale;
 
+  // Always-current ref for setCanvasScale — used by the keyboard shortcut effect so
+  // the handler never captures a stale closure (which would overwrite workspace.zoom).
+  const setCanvasScaleRef = useRef(setCanvasScale);
+  setCanvasScaleRef.current = setCanvasScale;
+
+  // Sync scaleDraft whenever canvasScale changes from any source
+  // (canvas Ctrl+scroll, keyboard shortcut, dropdown — all paths update workspace.canvasScale).
+  useEffect(() => {
+    setScaleDraft(scaleLabel(currentScale));
+  }, [currentScale]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Sync scaleDraft when workspace loads a different workspace (id change only)
   const prevWorkspaceIdRef = useRef(workspace.id);
   if (prevWorkspaceIdRef.current !== workspace.id) {
     prevWorkspaceIdRef.current = workspace.id;
     localScaleRef.current = workspace.canvasScale ?? 1;
-    // Can't call setState here during render; schedule it
-    setTimeout(() => setScaleDraft(scaleLabel(workspace.canvasScale ?? 1)), 0);
   }
 
   // Close scale dropdown on outside click
@@ -140,7 +149,7 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
   function commitScaleDraft() {
     const raw = scaleDraft.replace("%", "").trim();
     const pct = parseFloat(raw);
-    if (!isNaN(pct) && pct >= 10 && pct <= 200) {
+    if (!isNaN(pct) && pct >= 50 && pct <= 200) {
       const rounded = Math.round(pct / 10) * 10;
       const next = rounded / 100;
       localScaleRef.current = next;
@@ -153,19 +162,39 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
     setScaleOpen(false);
   }
 
-  // Ctrl+scroll on the scale widget nudges by 1% per tick.
+  // Ctrl/Cmd + Plus/Minus keyboard shortcut nudges scale by 10% per press.
+  // Uses setCanvasScaleRef (not setCanvasScale directly) so the handler always
+  // calls the latest version of setCanvasScale and never overwrites workspace.zoom.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.key !== "+" && e.key !== "-" && e.key !== "=" && e.key !== "_") return;
+      e.preventDefault();
+      const delta = (e.key === "+" || e.key === "=") ? 10 : -10;
+      const nextPct = Math.round(localScaleRef.current * 100) + delta;
+      const clamped = Math.max(50, Math.min(200, nextPct));
+      const next = clamped / 100;
+      localScaleRef.current = next;
+      setScaleDraft(scaleLabel(next));
+      setCanvasScaleRef.current(next);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Ctrl/Cmd+scroll on the scale widget nudges by 1% per tick.
   // Uses localScaleRef so rapid ticks accumulate correctly without stale state.
   function handleScaleWheel(e: React.WheelEvent) {
-    if (!e.ctrlKey) return;
+    if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     e.stopPropagation();
     const delta = e.deltaY > 0 ? -1 : 1;
     const nextPct = Math.round(localScaleRef.current * 100) + delta;
-    const clamped = Math.max(10, Math.min(200, nextPct));
+    const clamped = Math.max(50, Math.min(200, nextPct));
     const next = clamped / 100;
     localScaleRef.current = next;          // update ref immediately for next tick
     setScaleDraft(scaleLabel(next));       // update input display synchronously
-    setCanvasScale(next);
+    setCanvasScaleRef.current(next);
   }
 
   // Search state
