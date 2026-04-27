@@ -18,6 +18,10 @@ src-tauri/target/
 
 # Claude Code local context
 .claude/
+CLAUDE.md
+
+# Cursor local context
+.cursor/
 
 # Editor directories and files
 .vscode/*
@@ -38,3 +42,6 @@ IDEAS_AND_CHANGES.md
 
 # Large / exploratory icon art only (pipeline scripts in branding/ stay tracked)
 branding/icon-concepts/
+
+# Icon development files
+branding/
