@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+__pycache__/
 
 # Rust build artifacts
 src-tauri/target/
@@ -34,3 +35,6 @@ SETTINGS_IDEAS.md
 SPEC.md
 test_workspace/
 IDEAS_AND_CHANGES.md
+
+# Large / exploratory icon art only (pipeline scripts in branding/ stay tracked)
+branding/icon-concepts/
