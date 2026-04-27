@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "trelline",
+  "productName": "Trelline",
   "version": "1.0.0",
   "identifier": "com.allen.trelline",
   "build": {
