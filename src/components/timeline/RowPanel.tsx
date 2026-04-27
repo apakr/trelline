@@ -175,6 +175,7 @@ export default function RowPanel({
           Rows
         </span>
         <button
+          data-tutorial="add-row"
           onClick={onAddRow}
           title="Add row"
           className="flex h-6 items-center gap-1 rounded px-2 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"

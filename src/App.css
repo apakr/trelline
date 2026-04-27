@@ -77,6 +77,12 @@ body,
   overflow-x: auto;
 }
 
+/* ── Tutorial overlay fade-in ───────────────────────────────────────────── */
+@keyframes tutorialFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* ── Marquee selection — marching ants animation on selected task bars ───── */
 @keyframes marchingAnts {
   to { stroke-dashoffset: -20; }

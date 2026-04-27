@@ -72,12 +72,14 @@ export interface AppSettings {
   invertScroll: boolean;
   dateFormat: "YYYY-MM-DD" | "YYYY-DD-MM";
   weekStartDay: "monday" | "saturday" | "sunday";
+  tutorialCompleted: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   invertScroll: false,
   dateFormat: "YYYY-MM-DD",
   weekStartDay: "monday",
+  tutorialCompleted: false,
 };
 
 export interface AppConfig {

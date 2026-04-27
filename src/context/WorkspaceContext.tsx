@@ -63,6 +63,8 @@ interface WorkspaceContextValue {
   refreshAppConfig: () => Promise<void>;
   forgetRecentWorkspace: (folderPath: string) => Promise<void>;
   updateSettings: (settings: AppSettings) => Promise<void>;
+  completeTutorial: () => Promise<void>;
+  resetTutorial: () => Promise<void>;
 
   // Rows
   addRow: (name: string) => Promise<Row>;
@@ -353,6 +355,22 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const updateSettings = useCallback(async (settings: AppSettings) => {
     await saveSettings(settings);
     setAppConfig((prev) => ({ ...prev, settings }));
+  }, []);
+
+  const completeTutorial = useCallback(async () => {
+    setAppConfig((prev) => {
+      const next = { ...prev, settings: { ...prev.settings, tutorialCompleted: true } };
+      saveSettings(next.settings);
+      return next;
+    });
+  }, []);
+
+  const resetTutorial = useCallback(async () => {
+    setAppConfig((prev) => {
+      const next = { ...prev, settings: { ...prev.settings, tutorialCompleted: false } };
+      saveSettings(next.settings);
+      return next;
+    });
   }, []);
 
   // -------------------------------------------------------------------------
@@ -767,6 +785,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     refreshAppConfig,
     forgetRecentWorkspace,
     updateSettings,
+    completeTutorial,
+    resetTutorial,
 
     addRow,
     updateRow,

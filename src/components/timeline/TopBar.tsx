@@ -72,7 +72,7 @@ interface TopBarProps {
 }
 
 export default function TopBar({ onScrollToToday, centerDateInputRef, centerDateISORef, onNavigateToDate, onSearchPreview, onSearchConfirm, onSearchCancel, onSearchClear }: TopBarProps) {
-  const { closeWorkspace, setPanel, appConfig, updateSettings } = useWorkspace();
+  const { closeWorkspace, setPanel, appConfig, updateSettings, resetTutorial } = useWorkspace();
   const { workspace, tasks, folderPath, setZoom, setCanvasScale, renameWorkspace } = useLoadedWorkspace();
   const settings = appConfig.settings;
 
@@ -567,7 +567,7 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
       </div>
 
       {/* Zoom controls */}
-      <div className="flex rounded border border-[var(--color-border)]">
+      <div data-tutorial="zoom" className="flex rounded border border-[var(--color-border)]">
         {(["days", "weeks", "months"] as ZoomLevel[]).map((z, i) => (
           <button
             key={z}
@@ -596,6 +596,7 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
 
       {/* New task button */}
       <button
+        data-tutorial="new-task"
         onClick={() => setPanel({ type: "newTask" })}
         className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
       >
@@ -688,6 +689,19 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
                 ))}
               </div>
             </div>
+
+            {/* Restart tutorial */}
+            <div className="my-1 border-t border-[var(--color-border)]" />
+            <button
+              onClick={() => { setSettingsOpen(false); resetTutorial(); }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-surface)] hover:text-[var(--color-text-primary)] transition-colors"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M1.5 6A4.5 4.5 0 1 0 3 2.5" />
+                <path d="M1.5 1v2h2" />
+              </svg>
+              Restart tutorial
+            </button>
           </div>
         )}
       </div>

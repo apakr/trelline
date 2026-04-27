@@ -7,9 +7,13 @@ import RowPanel from "./RowPanel";
 import TimelineCanvas from "./TimelineCanvas";
 import NewTaskPanel from "./NewTaskPanel";
 import TaskDetailPanel from "./TaskDetailPanel";
+import TutorialOverlay from "../tutorial/TutorialOverlay";
 
 export default function TimelineView() {
-  const { workspace, tasks, addRow, updateRow, reorderRows, deleteRow, setScrollCenterDate, panel, setPanel, deleteLaneAndTask, appConfig } = useLoadedWorkspace();
+  const { workspace, tasks, addRow, updateRow, reorderRows, deleteRow, setScrollCenterDate, panel, setPanel, deleteLaneAndTask, appConfig, completeTutorial } = useLoadedWorkspace();
+
+  const devOverride = import.meta.env.DEV && typeof localStorage !== "undefined" && localStorage.getItem("trelline_tutorial_force") === "1";
+  const showTutorial = !appConfig.settings.tutorialCompleted || devOverride;
   function toggleRowCollapse(rowId: string) {
     const row = workspace.rows.find((r) => r.id === rowId);
     if (row) updateRow(rowId, { collapsed: !row.collapsed });
@@ -82,6 +86,7 @@ export default function TimelineView() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[var(--color-bg-base)]">
+      {showTutorial && <TutorialOverlay onComplete={completeTutorial} />}
       <TopBar
         onScrollToToday={() => scrollToTodayRef.current?.()}
         centerDateInputRef={centerDateInputRef}
