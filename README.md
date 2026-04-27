@@ -99,5 +99,3 @@ All files are human-readable JSON. You can open them in any text editor, back th
 ## Status
 
 Early release. Core functionality is complete. Known gaps: no auto-updater, no export. Feedback and issues welcome.
-
-**macOS known issues:** `Ctrl` shortcuts conflict with `Cmd`; pressing Escape while the task panel is open exits fullscreen; date centering can jump when switching from Days to a coarser zoom level.
