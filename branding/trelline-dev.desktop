@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=trelline (dev)
-Comment=Copy to ~/.local/share/applications and replace Exec/Icon with absolute paths to this repo, then run update-desktop-database
-Exec=REPLACE_PATH_src-tauri/target/debug/timeline_app
-Icon=REPLACE_PATH_src-tauri/icons/128x128.png
-Terminal=false
-Categories=Office;ProjectManagement;
