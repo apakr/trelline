@@ -98,4 +98,8 @@ All files are human-readable JSON. You can open them in any text editor, back th
 
 ## Status
 
-Early release. Core functionality is complete. Known gaps: no auto-updater, no export. Feedback and issues welcome.
+Stable release. Core functionality is complete. The app checks for updates on launch and shows a notification when a new version is available.
+
+**Known gaps:** no export, no auto-install updater (update notifications link to the releases page for manual download).
+
+**macOS known issues:** `Ctrl` shortcuts conflict with `Cmd`; pressing Escape while the task panel is open exits fullscreen; date centering can jump when switching from Days to a coarser zoom level.

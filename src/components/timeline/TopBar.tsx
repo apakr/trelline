@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { parseISO, startOfDay } from "date-fns";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import type { Task, ZoomLevel } from "../../types";
 import { useWorkspace, useLoadedWorkspace } from "../../context/WorkspaceContext";
 import DateNavPicker from "./DateNavPicker";
 import AsanaImportModal from "../AsanaImportModal";
+import { useUpdateCheck } from "../../hooks/useUpdateCheck";
 
 type DateFormatOption = "YYYY-MM-DD" | "YYYY-DD-MM";
 
@@ -75,6 +76,10 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
   const { closeWorkspace, setPanel, appConfig, updateSettings, resetTutorial } = useWorkspace();
   const { workspace, tasks, folderPath, setZoom, setCanvasScale, renameWorkspace } = useLoadedWorkspace();
   const settings = appConfig.settings;
+
+  // Update notification
+  const { updateAvailable, latestVersion } = useUpdateCheck();
+  const [updateDismissed, setUpdateDismissed] = useState(false);
 
   // Workspace dropdown
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
@@ -705,6 +710,27 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
           </div>
         )}
       </div>
+
+      {/* Update available pill */}
+      {updateAvailable && !updateDismissed && (
+        <div className="flex items-center gap-1 rounded-full border border-[var(--color-accent)] bg-[var(--color-accent)]/10 pl-2.5 pr-1 py-0.5 text-[11px] font-medium text-[var(--color-accent)]">
+          <button
+            onClick={() => openUrl("https://github.com/apakr/trelline/releases/latest")}
+            className="hover:underline whitespace-nowrap"
+          >
+            v{latestVersion} available ↗
+          </button>
+          <button
+            onClick={() => setUpdateDismissed(true)}
+            title="Dismiss"
+            className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full opacity-60 hover:opacity-100"
+          >
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M1 1l6 6M7 1L1 7" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       {/* Close workspace */}
       <button
