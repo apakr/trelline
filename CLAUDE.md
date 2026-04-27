@@ -63,21 +63,40 @@ The `canvasScale` multiplier (stored in `workspace.json`) controls `pxPerDay`. I
 Scale changes are atomic via a `setCanvasScaleRef` indirection that avoids stale closures overwriting `workspace.zoom`.
 
 ### Asana import
-Users can import a project from an Asana JSON export (`Project → (Your Project Name) → Export / Print → JSON`). Entry points:
-- **WorkspacePicker** — "Import from Asana (JSON)" button creates a brand-new workspace from the file
+Users can import a project from either an Asana **JSON** export or an Asana **CSV** export. The modal (`AsanaImportModal.tsx`) lets the user pick between them and shows a capability summary for each format. Entry points:
+- **WorkspacePicker** — "Import from Asana" button creates a brand-new workspace from the file
 - **TopBar workspace dropdown** — "Import from Asana" appends rows/tasks into the currently open workspace (undoable)
 
-**Mapping rules:**
-- Asana sections → Trelline rows (one row per section; tasks with no section → "Uncategorized" row)
+**Format comparison:**
+| | JSON | CSV |
+|---|---|---|
+| Milestones | ✓ preserved | ✗ all tasks become regular |
+| Dependency links | ✗ not in export | ✓ partial (name-matched) |
+| Sections / rows | ✓ | ✓ |
+| Completion status | ✓ | ✓ |
+
+**Shared mapping rules (both formats):**
+- Asana sections → Trelline rows (tasks with no section → "Uncategorized" row)
 - `start_on` / `due_on` → `start` / `end`; missing `start_on` falls back to `due_on`; fully missing dates → today
-- `resource_subtype: "milestone"` → `isMilestone: true`, `start = end = due_on`
 - `completed: true` → `status: "done"`
 - `notes` → `notes`
 - Subtasks are flattened into their parent's row as regular tasks
-- Dependencies are **not** imported — Asana's JSON export does not include dependency links
-- Tasks within each row are sorted by start date; each is assigned a unique `lane` index so they render one-per-lane, mirroring Asana's per-task rows within sections
+- **Lane assignment — greedy packing:** tasks within a row are sorted by start date, then packed into as few lanes as possible. A task starts at lane 0; it is only bumped to the next lane if it genuinely overlaps (in date) with a task already in that lane. Non-overlapping tasks always share a lane.
 
-**Key files:** `src/lib/asanaImport.ts` (pure parser), `src/components/AsanaImportModal.tsx` (multi-step UI), `src/lib/fs.ts → bulkCreateWorkspace`, `WorkspaceContext → importAsanaIntoWorkspace`.
+**JSON-specific:** `resource_subtype: "milestone"` → `isMilestone: true`, `start = end = due_on`. No dependency data in the export.
+
+**CSV-specific:** The "Blocked By (Dependencies)" column is parsed; each named dependency is matched by task name to resolve an internal task ID. Unresolved references are surfaced as warnings in the import preview. Milestones are not distinguishable in CSV and are imported as regular tasks.
+
+**Key files:** `src/lib/asanaImport.ts` (JSON parser), `src/lib/csvImport.ts` (CSV parser + RFC 4180 tokenizer), `src/components/AsanaImportModal.tsx` (multi-step UI), `src/lib/fs.ts → bulkCreateWorkspace`, `WorkspaceContext → importAsanaIntoWorkspace`.
+
+### Onboarding tutorial
+A lightweight spotlight tour runs on first launch and can be restarted from the Settings popover ("Restart tutorial").
+
+- **State:** `appConfig.settings.tutorialCompleted: boolean` (stored in `app-config.json` via `@tauri-apps/plugin-store`). `WorkspaceContext` exposes `completeTutorial()` and `resetTutorial()`.
+- **Steps:** defined in `src/components/tutorial/tutorialSteps.ts` — 8 steps covering welcome, rows, new-task button, task detail panel, dependency arrows, zoom controls, settings, and done.
+- **Rendering:** `TutorialOverlay.tsx` — full-screen backdrop with a `box-shadow` cutout spotlight around the `data-tutorial="<id>"` target element, plus a positioned tooltip card with progress bar and Prev/Next/Done controls.
+- **Targeting:** key elements carry `data-tutorial` attributes: `data-tutorial="new-task"` (TopBar), `data-tutorial="zoom"` (TopBar zoom controls), `data-tutorial="add-row"` (RowPanel add button).
+- **Animation:** `@keyframes tutorialFadeIn` defined in `App.css`.
 
 ### State management
 One React context — `WorkspaceContext` — holds all in-memory workspace + task state. Every mutation writes to disk immediately via Tauri fs plugin (no batching, no undo).
@@ -110,8 +129,11 @@ File I/O is handled through a set of async helpers (`openWorkspace`, `saveTask`,
 - `SPEC.md` — full product requirements, data schemas, UI layout, and feature details. Read this before implementing any feature.
 - `src/components/timeline/TimelineCanvas.tsx` — custom SVG canvas, the core of the app
 - `src/context/WorkspaceContext.tsx` — all state and disk persistence
-- `src/types/index.ts` — Task, Row, ZoomLevel, WorkspaceState types
+- `src/types/index.ts` — Task, Row, ZoomLevel, WorkspaceState, AppSettings types
 - `src/lib/asanaImport.ts` — pure Asana JSON parser (no I/O); call `parseAsanaExport(raw)` to get rows/tasks/warnings
-- `src/components/AsanaImportModal.tsx` — multi-step Asana import UI (file select → preview → import)
+- `src/lib/csvImport.ts` — RFC 4180 CSV parser + Asana CSV → rows/tasks/deps; call `parseAsanaCSV(text)`
+- `src/components/AsanaImportModal.tsx` — multi-step Asana import UI (format select → file select → preview → import)
+- `src/components/tutorial/tutorialSteps.ts` — ordered array of TutorialStep objects (id, target, placement, title, body)
+- `src/components/tutorial/TutorialOverlay.tsx` — spotlight tour overlay component
 - `src-tauri/tauri.conf.json` — app config (identifier: `com.allen.timeline_app`, window size, CSP)
 - `src-tauri/src/lib.rs` — Rust IPC command handlers

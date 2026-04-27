@@ -25,6 +25,10 @@ export interface AsanaImportPreview {
   rows: Row[];
   tasks: Task[];
   warnings: string[];
+  /** Number of dependency links successfully resolved and imported. */
+  depImportedCount: number;
+  /** Human-readable descriptions of dependency references that could not be resolved. */
+  depWarnings: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -225,9 +229,10 @@ export function parseAsanaExport(raw: unknown): AsanaImportPreview {
   }
 
   // -------------------------------------------------------------------------
-  // Build Task objects — assign each task a unique lane within its row so
-  // that the imported layout mirrors Asana's one-task-per-row style.
-  // Update each Row's laneCount to match.
+  // Build Task objects.
+  //
+  // Pack tasks into as few lanes as possible: non-overlapping tasks share the
+  // same lane, a new lane is only opened when tasks genuinely overlap in date.
   // -------------------------------------------------------------------------
 
   let missingDateCount = 0;
@@ -239,11 +244,23 @@ export function parseAsanaExport(raw: unknown): AsanaImportPreview {
     const rowId = sectionToRowId.get(sectionGid)!;
     const row = rows.find((r) => r.id === rowId)!;
 
-    // Give the row enough lanes to show every task on its own horizontal line.
-    row.laneCount = Math.max(1, group.length);
+    const laneRanges: { start: string; end: string }[][] = [];
 
-    group.forEach((rt, laneIndex) => {
+    group.forEach((rt, sortedIdx) => {
       if (rt.missingDate) missingDateCount++;
+
+      let assignedLane = 0;
+      while (true) {
+        if (assignedLane >= laneRanges.length) {
+          laneRanges.push([]);
+        }
+        const conflict = laneRanges[assignedLane].some(
+          (other) => rt.resolvedStart <= other.end && rt.resolvedEnd >= other.start
+        );
+        if (!conflict) break;
+        assignedLane++;
+      }
+      laneRanges[assignedLane].push({ start: rt.resolvedStart, end: rt.resolvedEnd });
 
       tasks.push({
         id: `task_${uuidv4()}`,
@@ -256,14 +273,14 @@ export function parseAsanaExport(raw: unknown): AsanaImportPreview {
         isMilestone: rt.resource_subtype === "milestone",
         notes: rt.notes,
         dependencies: [],
-        // Each task claims its own lane so tasks don't pile onto lane 0.
-        // rowOrder mirrors laneIndex so the sort in computeSubLanes is stable.
-        rowOrder: laneIndex,
-        lane: laneIndex,
+        rowOrder: sortedIdx,
+        lane: assignedLane,
         createdAt: now,
         updatedAt: now,
       });
     });
+
+    row.laneCount = Math.max(1, laneRanges.length);
   }
 
   if (missingDateCount > 0) {
@@ -277,5 +294,5 @@ export function parseAsanaExport(raw: unknown): AsanaImportPreview {
     );
   }
 
-  return { projectName, rows, tasks, warnings };
+  return { projectName, rows, tasks, warnings, depImportedCount: 0, depWarnings: [] };
 }

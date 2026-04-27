@@ -11,17 +11,18 @@ Works for project planning, logging personal activities with time-based and caus
 ## Features
 
 - **Fully offline** — no network requests, no backend, no database process
-- **Import from Asana** — import a project directly from an Asana JSON export; sections become rows, tasks/milestones/notes/completion status are all carried over
+- **Import from Asana** — import via JSON (preserves milestones, sections, completion status) or CSV (preserves partial dependency links); sections become rows, tasks are greedy-packed into lanes so non-overlapping tasks share a row
 - **Custom SVG timeline canvas** — task bars, drag-to-move, drag-to-resize, all snapping to day boundaries
 - **Dependency arrows** — draw finish-to-start dependencies between tasks across any row
 - **Sub-lanes** — overlapping tasks stack automatically within a row; drag to reorder
 - **Milestones** — render as diamonds on the canvas
 - **Zoom levels** — Days, Weeks, Months; scroll position persists per workspace
-- **Canvas scale** — 50–200% zoom via contorls or the scale picker in the top bar
+- **Canvas scale** — 50–200% zoom via controls or the scale picker in the top bar
 - **Rich text task notes** — full formatting in the task detail panel
 - **Row management** — add, rename, reorder, delete rows; collapsible rows
 - **Canvas search** — find tasks by name
 - **Settings** — scroll direction, date format, week start day
+- **Onboarding tutorial** — interactive spotlight tour on first launch; restartable from settings
 
 ### Controls
 
@@ -98,3 +99,5 @@ All files are human-readable JSON. You can open them in any text editor, back th
 ## Status
 
 Early release. Core functionality is complete. Known gaps: no auto-updater, no export. Feedback and issues welcome.
+
+**macOS known issues:** `Ctrl` shortcuts conflict with `Cmd`; pressing Escape while the task panel is open exits fullscreen; date centering can jump when switching from Days to a coarser zoom level.
