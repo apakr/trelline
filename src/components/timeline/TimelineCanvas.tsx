@@ -31,6 +31,11 @@ export const ROW_HEIGHT = 48;
 const BAR_PAD_Y = 8;                        // vertical gap between bar and row edge
 const BAR_HEIGHT = ROW_HEIGHT - BAR_PAD_Y * 2; // 32px
 const MILESTONE_R = 13;                     // half-size of milestone diamond
+const MAX_LABEL_OVERFLOW = 200;             // px a label may bleed past its task/milestone right edge
+const LABEL_OVERFLOW_GAP = 16;             // px gap kept before the next task bar when clipping
+const MIN_LABEL_WIDTH    = 24;             // px minimum available width before suppressing the label
+const LABEL_CHAR_PX      = 7.5;           // approximate px-per-character at fontSize 12
+const MIN_WRAP_WIDTH     = 80;            // px bar width threshold before attempting two-line title wrap
 
 // ---------------------------------------------------------------------------
 // Column descriptor for the date axis
@@ -1609,12 +1614,51 @@ export default function TimelineCanvas({
             const xEnd = dateToX(addDays(parseISO(effEnd), 1), viewStart, viewEnd, canvasWidth);
             const w = xEnd - x;
             const barY = rowY + subLane * ROW_HEIGHT + BAR_PAD_Y;
+
+            if (task.isMilestone) {
+              // Milestone label sits to the right of the diamond.
+              const cx = x + w / 2;
+              const labelTextX = cx + MILESTONE_R + 6;
+              let labelRight = labelTextX + MAX_LABEL_OVERFLOW;
+              for (const other of tasks) {
+                if (other.id === task.id || other.rowId !== effRowId) continue;
+                if ((subLaneMap.get(other.id) ?? 0) !== subLane) continue;
+                const otherLeft = dateToX(parseISO(other.start), viewStart, viewEnd, canvasWidth);
+                if (otherLeft > cx && otherLeft < labelRight) {
+                  labelRight = otherLeft - LABEL_OVERFLOW_GAP;
+                }
+              }
+              return (
+                <clipPath key={task.id} id={`clip-${task.id}`}>
+                  <rect
+                    x={labelTextX}
+                    y={barY}
+                    width={Math.max(labelRight - labelTextX, 0)}
+                    height={BAR_HEIGHT}
+                  />
+                </clipPath>
+              );
+            }
+
+            // Regular task: label starts inside the bar and may bleed right.
+            // labelRight begins at the bar's right edge + MAX_LABEL_OVERFLOW so that text
+            // which fits within the bar is never truncated.
+            let labelRight = xEnd + MAX_LABEL_OVERFLOW;
+            for (const other of tasks) {
+              if (other.id === task.id || other.rowId !== effRowId) continue;
+              if ((subLaneMap.get(other.id) ?? 0) !== subLane) continue;
+              const otherLeft = dateToX(parseISO(other.start), viewStart, viewEnd, canvasWidth);
+              // Use >= so immediately-adjacent tasks (otherLeft === xEnd) are caught
+              if (otherLeft >= xEnd && otherLeft < labelRight) {
+                labelRight = otherLeft - LABEL_OVERFLOW_GAP;
+              }
+            }
             return (
               <clipPath key={task.id} id={`clip-${task.id}`}>
                 <rect
-                  x={x + 6}
+                  x={x + 4}
                   y={barY}
-                  width={Math.max(w - 12, 0)}
+                  width={Math.max(labelRight - (x + 4), 0)}
                   height={BAR_HEIGHT}
                 />
               </clipPath>
@@ -1915,18 +1959,24 @@ export default function TimelineCanvas({
             const isHovered = hoveredTaskId === task.id;
 
             const rawLabel = isDone ? `✓ ${task.title}` : task.title;
-            const displayLabel = rawLabel.length > 20 ? rawLabel.slice(0, 20) + "…" : rawLabel;
             const labelX = cx + r + 6;
-            const labelEndX = labelX + displayLabel.length * 8;
-
-            const hasLabelSpace = !tasks.some((other) => {
-              if (other.id === task.id || other.rowId !== task.rowId) return false;
-              // Only check tasks in the same sub-lane — different lanes are at different Y positions
-              if ((subLaneMap.get(other.id) ?? 0) !== subLane) return false;
-              const oLeft  = dateToX(parseISO(other.start), viewStart, viewEnd, canvasWidth);
-              const oRight = dateToX(addDays(parseISO(other.end), 1), viewStart, viewEnd, canvasWidth);
-              return oLeft < labelEndX && oRight > labelX;
-            });
+            // Mirror the clip-path overflow calculation to decide whether the label
+            // has any usable space (same logic as the <defs> block above).
+            let labelRight = labelX + MAX_LABEL_OVERFLOW;
+            for (const other of tasks) {
+              if (other.id === task.id || other.rowId !== task.rowId) continue;
+              if ((subLaneMap.get(other.id) ?? 0) !== subLane) continue;
+              const otherLeft = dateToX(parseISO(other.start), viewStart, viewEnd, canvasWidth);
+              if (otherLeft > cx && otherLeft < labelRight) {
+                labelRight = otherLeft - LABEL_OVERFLOW_GAP;
+              }
+            }
+            const msLabelAvail = labelRight - labelX;
+            const showMilestoneLabel = msLabelAvail >= MIN_LABEL_WIDTH;
+            const msLabel =
+              rawLabel.length * LABEL_CHAR_PX > msLabelAvail
+                ? rawLabel.slice(0, Math.max(0, Math.floor((msLabelAvail - LABEL_CHAR_PX * 1.5) / LABEL_CHAR_PX))) + "…"
+                : rawLabel;
 
             const diamondPoints = `${cx},${barCenterY - r} ${cx + r},${barCenterY} ${cx},${barCenterY + r} ${cx - r},${barCenterY}`;
             const milestoneStroke = isOverdue ? "#ef4444" : task.color;
@@ -1957,16 +2007,17 @@ export default function TimelineCanvas({
                     style={{ pointerEvents: "none" }}
                   />
                 )}
-                {hasLabelSpace && (
+                {showMilestoneLabel && (
                   <text
                     x={labelX}
                     y={barCenterY + 4}
                     fontSize={12}
                     fill="white"
                     fillOpacity={0.85}
+                    clipPath={`url(#clip-${task.id})`}
                     style={{ pointerEvents: "none", userSelect: "none" }}
                   >
-                    {displayLabel}
+                    {msLabel}
                   </text>
                 )}
                 {/* Dep connector dots on milestone diamonds — hidden while selected */}
@@ -2028,6 +2079,49 @@ export default function TimelineCanvas({
           }
 
           const isHovered = hoveredTaskId === task.id;
+
+          // Compute label — wraps to two lines when bar is wide enough, otherwise
+          // falls back to single-line overflow with ellipsis.
+          const rawTaskLabel = isDone ? `✓ ${task.title}` : task.title;
+          const barInnerW = w - 16; // inner width (8px padding each side)
+          const useWrap = w >= MIN_WRAP_WIDTH && rawTaskLabel.length * LABEL_CHAR_PX > barInnerW;
+          let taskLabel: string;
+          let taskLabel2: string | null = null;
+
+          if (useWrap) {
+            const charsPerLine = Math.floor(barInnerW / LABEL_CHAR_PX);
+            const words = rawTaskLabel.split(" ");
+            let line1 = "";
+            for (const word of words) {
+              const candidate = line1 ? line1 + " " + word : word;
+              if (candidate.length <= charsPerLine) { line1 = candidate; } else { break; }
+            }
+            if (!line1) line1 = rawTaskLabel.slice(0, charsPerLine); // first word too long
+            const rest = rawTaskLabel.slice(line1.length).trim();
+            taskLabel = line1;
+            if (rest) {
+              taskLabel2 = rest.length > charsPerLine
+                ? rest.slice(0, Math.max(0, charsPerLine - 1)) + "…"
+                : rest;
+            }
+          } else {
+            // Single line with overflow past the bar edge + ellipsis when clipped.
+            // Start at xEnd (not label start) so text within the bar is never truncated.
+            let taskLabelRight = xEnd + MAX_LABEL_OVERFLOW;
+            for (const other of tasks) {
+              if (other.id === task.id || other.rowId !== task.rowId) continue;
+              if ((subLaneMap.get(other.id) ?? 0) !== subLane) continue;
+              const otherLeft = dateToX(parseISO(other.start), viewStart, viewEnd, canvasWidth);
+              if (otherLeft >= xEnd && otherLeft < taskLabelRight) {
+                taskLabelRight = otherLeft - LABEL_OVERFLOW_GAP;
+              }
+            }
+            const taskLabelAvail = taskLabelRight - (x + 8);
+            taskLabel =
+              rawTaskLabel.length * LABEL_CHAR_PX > taskLabelAvail
+                ? rawTaskLabel.slice(0, Math.max(0, Math.floor((taskLabelAvail - LABEL_CHAR_PX * 1.5) / LABEL_CHAR_PX))) + "…"
+                : rawTaskLabel;
+          }
 
           return (
             <g
@@ -2091,17 +2185,30 @@ export default function TimelineCanvas({
                 />
               )}
               {w >= 24 && (
-                <text
-                  x={x + 8}
-                  y={barCenterY + 4}
-                  fontSize={12}
-                  fill="white"
-                  fillOpacity={0.9}
-                  clipPath={`url(#clip-${task.id})`}
-                  style={{ pointerEvents: "none", userSelect: "none" }}
-                >
-                  {isDone ? `✓ ${task.title}` : task.title}
-                </text>
+                useWrap ? (
+                  <text
+                    fontSize={12}
+                    fill="white"
+                    fillOpacity={0.9}
+                    clipPath={`url(#clip-${task.id})`}
+                    style={{ pointerEvents: "none", userSelect: "none" }}
+                  >
+                    <tspan x={x + 8} y={barCenterY - 2}>{taskLabel}</tspan>
+                    {taskLabel2 && <tspan x={x + 8} y={barCenterY + 11}>{taskLabel2}</tspan>}
+                  </text>
+                ) : (
+                  <text
+                    x={x + 8}
+                    y={barCenterY + 4}
+                    fontSize={12}
+                    fill="white"
+                    fillOpacity={0.9}
+                    clipPath={`url(#clip-${task.id})`}
+                    style={{ pointerEvents: "none", userSelect: "none" }}
+                  >
+                    {taskLabel}
+                  </text>
+                )
               )}
               {/* Resize handles — disabled while task is selected */}
               {w >= 16 && !selectedTaskIds.has(task.id) && (
