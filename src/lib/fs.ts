@@ -141,6 +141,38 @@ export async function saveTask(folderPath: string, task: Task): Promise<void> {
 }
 
 /**
+ * Creates a new workspace from pre-built rows and tasks (e.g. from an Asana import).
+ * Writes workspace.json and all task files in parallel.
+ * The folderPath directory must already exist (user selected it via dialog).
+ */
+export async function bulkCreateWorkspace(
+  folderPath: string,
+  name: string,
+  rows: Row[],
+  tasks: Task[],
+  zoom: ZoomLevel = "weeks"
+): Promise<WorkspaceState> {
+  const workspace: Workspace = {
+    id: `workspace_${uuidv4()}`,
+    name,
+    rows,
+    zoom,
+    lastOpened: new Date().toISOString(),
+  };
+
+  const tasksDir = await tasksDirPath(folderPath);
+  if (!(await exists(tasksDir))) {
+    await mkdir(tasksDir, { recursive: true });
+  }
+
+  const wsPath = await workspaceJsonPath(folderPath);
+  await writeTextFile(wsPath, JSON.stringify(workspace, null, 2));
+  await Promise.all(tasks.map((task) => saveTask(folderPath, task)));
+
+  return { workspace, tasks, folderPath };
+}
+
+/**
  * Deletes a task file from disk. Silent no-op if the file doesn't exist.
  */
 export async function deleteTaskFile(

@@ -13,8 +13,10 @@ No subscriptions. No accounts. No cloud. Your tasks are plain JSON files in a fo
 - **Sub-lanes** — overlapping tasks stack automatically within a row; drag to reorder
 - **Milestones** — render as diamonds on the canvas
 - **Zoom levels** — Days, Weeks, Months; scroll position persists per workspace
+- **Canvas scale** — 50–200% zoom via Ctrl+scroll, Ctrl+`+`/`-`, or the scale picker in the top bar
 - **Undo / redo** — Ctrl+Z / Ctrl+Y
-- **Marquee select** — drag to select multiple tasks, move or delete as a group
+- **Asana import** — import a project directly from an Asana JSON export; sections become rows, tasks/milestones/notes/completion status are all carried over
+- **Marquee select** — Ctrl + drag or Middle Mouse Button + drag to select multiple tasks, move or delete as a group
 - **Rich text task notes** — full formatting via Tiptap editor
 - **Row management** — add, rename, reorder, delete rows; collapsible rows
 - **Canvas search** — find tasks by name
@@ -85,4 +87,4 @@ All files are human-readable JSON. You can open them in any text editor, back th
 
 ## Status
 
-Early release. Core functionality is complete. Known gaps: no auto-updater, no app icon, no export. Feedback and issues welcome.
+Early release. Core functionality is complete. Known gaps: no auto-updater, no export. Feedback and issues welcome.

@@ -54,6 +54,31 @@ App
     └── TaskDetailPanel    — right sidebar, opens on task click
 ```
 
+### Canvas scale
+The `canvasScale` multiplier (stored in `workspace.json`) controls `pxPerDay`. It ranges from 0.5–2.0 (50–200%) in 10% steps. Three ways to change it:
+- **Ctrl+scroll** on the canvas — fine 1% increments via `localScaleRef` accumulator in `TopBar`
+- **Ctrl+`+` / Ctrl+`-`** keyboard shortcut — 10% steps, handled in `TopBar`'s global `keydown` listener
+- **Scale picker dropdown** in `TopBar` — click/type a percentage or pick from preset list
+
+Scale changes are atomic via a `setCanvasScaleRef` indirection that avoids stale closures overwriting `workspace.zoom`.
+
+### Asana import
+Users can import a project from an Asana JSON export (`Project → (Your Project Name) → Export / Print → JSON`). Entry points:
+- **WorkspacePicker** — "Import from Asana (JSON)" button creates a brand-new workspace from the file
+- **TopBar workspace dropdown** — "Import from Asana" appends rows/tasks into the currently open workspace (undoable)
+
+**Mapping rules:**
+- Asana sections → Trelline rows (one row per section; tasks with no section → "Uncategorized" row)
+- `start_on` / `due_on` → `start` / `end`; missing `start_on` falls back to `due_on`; fully missing dates → today
+- `resource_subtype: "milestone"` → `isMilestone: true`, `start = end = due_on`
+- `completed: true` → `status: "done"`
+- `notes` → `notes`
+- Subtasks are flattened into their parent's row as regular tasks
+- Dependencies are **not** imported — Asana's JSON export does not include dependency links
+- Tasks within each row are sorted by start date; each is assigned a unique `lane` index so they render one-per-lane, mirroring Asana's per-task rows within sections
+
+**Key files:** `src/lib/asanaImport.ts` (pure parser), `src/components/AsanaImportModal.tsx` (multi-step UI), `src/lib/fs.ts → bulkCreateWorkspace`, `WorkspaceContext → importAsanaIntoWorkspace`.
+
 ### State management
 One React context — `WorkspaceContext` — holds all in-memory workspace + task state. Every mutation writes to disk immediately via Tauri fs plugin (no batching, no undo).
 
@@ -66,7 +91,7 @@ my-workspace/
     task_<uuid>.json  # one file per task
 ```
 
-File I/O is handled through a set of async helpers (`openWorkspace`, `saveTask`, `deleteTask`, `saveWorkspace`, `createWorkspace`) — all going through `@tauri-apps/plugin-fs`. Last-opened workspace path is stored in Tauri's app local data dir via `@tauri-apps/plugin-store`.
+File I/O is handled through a set of async helpers (`openWorkspace`, `saveTask`, `deleteTask`, `saveWorkspace`, `createWorkspace`, `bulkCreateWorkspace`) — all going through `@tauri-apps/plugin-fs`. Last-opened workspace path is stored in Tauri's app local data dir via `@tauri-apps/plugin-store`.
 
 ### IDs
 - Task IDs: `uuid v4` prefixed with `task_`
@@ -86,5 +111,7 @@ File I/O is handled through a set of async helpers (`openWorkspace`, `saveTask`,
 - `src/components/timeline/TimelineCanvas.tsx` — custom SVG canvas, the core of the app
 - `src/context/WorkspaceContext.tsx` — all state and disk persistence
 - `src/types/index.ts` — Task, Row, ZoomLevel, WorkspaceState types
+- `src/lib/asanaImport.ts` — pure Asana JSON parser (no I/O); call `parseAsanaExport(raw)` to get rows/tasks/warnings
+- `src/components/AsanaImportModal.tsx` — multi-step Asana import UI (file select → preview → import)
 - `src-tauri/tauri.conf.json` — app config (identifier: `com.allen.timeline_app`, window size, CSP)
 - `src-tauri/src/lib.rs` — Rust IPC command handlers

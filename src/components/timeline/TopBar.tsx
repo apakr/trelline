@@ -4,6 +4,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Task, ZoomLevel } from "../../types";
 import { useWorkspace, useLoadedWorkspace } from "../../context/WorkspaceContext";
 import DateNavPicker from "./DateNavPicker";
+import AsanaImportModal from "../AsanaImportModal";
 
 type DateFormatOption = "YYYY-MM-DD" | "YYYY-DD-MM";
 
@@ -78,6 +79,9 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
   // Workspace dropdown
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
   const wsMenuRef = useRef<HTMLDivElement>(null);
+
+  // Asana import modal
+  const [importModalOpen, setImportModalOpen] = useState(false);
 
   useEffect(() => {
     if (!wsMenuOpen) return;
@@ -404,6 +408,15 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
             >
               Open in Finder
             </button>
+            <button
+              onClick={() => {
+                setWsMenuOpen(false);
+                setImportModalOpen(true);
+              }}
+              className="flex w-full items-center px-3 py-1.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]"
+            >
+              Import from Asana
+            </button>
             <div className="my-1 border-t border-[var(--color-border)]" />
             <button
               onClick={() => {
@@ -689,6 +702,13 @@ export default function TopBar({ onScrollToToday, centerDateInputRef, centerDate
           <path d="M2 2l10 10M12 2L2 12" />
         </svg>
       </button>
+
+      {importModalOpen && (
+        <AsanaImportModal
+          mode="into-current"
+          onClose={() => setImportModalOpen(false)}
+        />
+      )}
     </div>
   );
 }

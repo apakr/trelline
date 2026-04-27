@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useWorkspace } from "../context/WorkspaceContext";
+import AsanaImportModal from "./AsanaImportModal";
 import type { RecentWorkspace } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -24,6 +25,16 @@ function PlusIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
       <path d="M7 1v12M1 7h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AsanaIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <circle cx="12" cy="6" r="4" />
+      <circle cx="6" cy="17" r="4" />
+      <circle cx="18" cy="17" r="4" />
     </svg>
   );
 }
@@ -130,6 +141,7 @@ export default function WorkspacePicker() {
   const [mode, setMode] = useState<"idle" | "new">("idle");
   const [newName, setNewName] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
+  const [importModalOpen, setImportModalOpen] = useState(false);
 
   const displayError = localError ?? error;
 
@@ -251,22 +263,32 @@ export default function WorkspacePicker() {
 
           {/* Primary actions */}
           {mode === "idle" && (
-            <div className="flex gap-2 p-3">
+            <div className="flex flex-col gap-2 p-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={handleOpenFolder}
+                  disabled={isLoading}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 py-2.5 text-sm text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:opacity-50 transition-colors"
+                >
+                  <FolderIcon />
+                  {isLoading ? "Opening…" : "Open Folder"}
+                </button>
+                <button
+                  onClick={() => { clearError(); setMode("new"); }}
+                  disabled={isLoading}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-md bg-[var(--color-accent)] px-3 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                >
+                  <PlusIcon />
+                  New Workspace
+                </button>
+              </div>
               <button
-                onClick={handleOpenFolder}
+                onClick={() => { clearError(); setImportModalOpen(true); }}
                 disabled={isLoading}
-                className="flex flex-1 items-center justify-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 py-2.5 text-sm text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:opacity-50 transition-colors"
+                className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 py-2.5 text-sm text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:opacity-50 transition-colors"
               >
-                <FolderIcon />
-                {isLoading ? "Opening…" : "Open Folder"}
-              </button>
-              <button
-                onClick={() => { clearError(); setMode("new"); }}
-                disabled={isLoading}
-                className="flex flex-1 items-center justify-center gap-2 rounded-md bg-[var(--color-accent)] px-3 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-              >
-                <PlusIcon />
-                New Workspace
+                <AsanaIcon />
+                Import from Asana (JSON)
               </button>
             </div>
           )}
@@ -277,6 +299,10 @@ export default function WorkspacePicker() {
           <p className="mt-3 text-center text-sm text-red-400">{displayError}</p>
         )}
       </div>
+
+      {importModalOpen && (
+        <AsanaImportModal mode="new" onClose={() => setImportModalOpen(false)} />
+      )}
     </div>
   );
 }

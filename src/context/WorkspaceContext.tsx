@@ -83,6 +83,9 @@ interface WorkspaceContextValue {
   deleteLaneAndTask: (taskId: string, insertedLane?: { rowId: string; lane: number }) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
 
+  // Import
+  importAsanaIntoWorkspace: (rows: Row[], tasks: Task[]) => Promise<void>;
+
   // Undo / redo
   canUndo: boolean;
   canRedo: boolean;
@@ -695,6 +698,43 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [workspaceState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // -------------------------------------------------------------------------
+  // Asana import (into current workspace)
+  // -------------------------------------------------------------------------
+
+  const importAsanaIntoWorkspace = useCallback(
+    async (newRows: Row[], newTasks: Task[]) => {
+      pushSnapshot();
+      const current = requireState();
+
+      // Offset new row order indices to come after existing rows
+      const maxOrder =
+        current.workspace.rows.length > 0
+          ? Math.max(...current.workspace.rows.map((r) => r.order))
+          : -1;
+      const adjustedRows = newRows.map((r, i) => ({
+        ...r,
+        order: maxOrder + 1 + i,
+      }));
+
+      const next: WorkspaceState = {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          rows: [...current.workspace.rows, ...adjustedRows],
+        },
+        tasks: [...current.tasks, ...newTasks],
+      };
+      setWorkspaceState(next);
+
+      await Promise.all([
+        saveWorkspace(current.folderPath, withScrollCenter(next.workspace)),
+        ...newTasks.map((t) => saveTask(current.folderPath, t)),
+      ]);
+    },
+    [workspaceState] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // -------------------------------------------------------------------------
   // Scroll center date persistence
   // -------------------------------------------------------------------------
 
@@ -739,6 +779,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     insertLaneAndCreateTask,
     deleteLaneAndTask,
     deleteTask,
+
+    importAsanaIntoWorkspace,
 
     canUndo: undoStack.length > 0,
     canRedo: redoStack.length > 0,
