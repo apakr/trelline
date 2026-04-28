@@ -8,6 +8,13 @@ Works for project planning, logging personal activities with time-based and caus
 
 ---
 
+<p align="center">
+  <img src="docs/screenshot-product.png" width="49%" alt="Project timeline — Acme product launch" />
+  <img src="docs/screenshot-personal.png" width="49%" alt="Personal timeline — journal, gym, travel" />
+</p>
+
+---
+
 ## Features
 
 - **Fully offline** — no network requests, no backend, no database process

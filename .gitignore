@@ -45,3 +45,6 @@ branding/icon-concepts/
 
 # Icon development files
 branding/
+
+# Demo workspaces
+demo_workspaces/
