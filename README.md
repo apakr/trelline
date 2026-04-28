@@ -1,4 +1,4 @@
-# trelline
+# Trelline
 
 A lightweight, offline-first timeline app. Inspired by Asana's Timeline view - built as a native desktop app so your data stays on your machine.
 
